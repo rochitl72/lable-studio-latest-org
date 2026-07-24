@@ -1,0 +1,89 @@
+erDiagram
+  users ||--o{ project_members : "belongs to"
+  projects ||--o{ project_members : "grants access"
+  users ||--o{ projects : "created"
+  projects ||--o{ labels : "defines classes"
+  projects ||--o{ dataset_versions : "snapshots"
+  projects ||--o{ images : "contains"
+  dataset_versions ||--o{ images : "version of"
+  images ||--o{ annotations : "has"
+  labels ||--o{ annotations : "classifies"
+  users ||--o{ annotations : "authored (created_by/updated_by)"
+  images ||--o| image_locks : "checked out by"
+  users ||--o{ activity_log : "acted"
+
+  users {
+    int id PK
+    string username UK
+    string password_hash
+    string role "user or admin"
+    bool is_active
+    bool must_change_password
+    datetime last_login_at
+  }
+  project_members {
+    int id PK
+    int project_id FK
+    int user_id FK
+    int added_by FK
+    datetime added_at
+  }
+  projects {
+    int id PK
+    string name
+    string task_type
+    int active_version_id FK
+    int created_by FK
+  }
+  labels {
+    int id PK
+    int project_id FK
+    string name
+    string color
+    string shortcut
+  }
+  dataset_versions {
+    int id PK
+    int project_id FK
+    int parent_version_id FK
+    int version_number
+    bool is_frozen
+  }
+  images {
+    int id PK
+    int project_id FK
+    int version_id FK
+    string storage_path "path on disk"
+    string status "unannotated..approved"
+    string split "train/val/test"
+    int assigned_to FK
+    int reviewed_by FK
+    datetime reviewed_at
+  }
+  annotations {
+    int id PK
+    int image_id FK
+    int label_id FK
+    string type "bbox|polygon|mask|keypoint"
+    json geometry "coords or RLE"
+    int created_by FK
+    int updated_by FK
+    datetime updated_at
+  }
+  image_locks {
+    int id PK
+    int image_id FK "unique"
+    int user_id FK
+    datetime heartbeat_at
+  }
+  activity_log {
+    int id PK
+    int user_id FK
+    string username "denormalised"
+    string action
+    int project_id
+    int image_id
+    int annotation_id
+    json details "before/after"
+    datetime created_at
+  }

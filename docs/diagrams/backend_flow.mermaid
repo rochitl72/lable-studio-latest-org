@@ -1,0 +1,41 @@
+flowchart TB
+  subgraph CLIENT["Browser - React SPA"]
+    UI["UI components<br/>annotate | dashboard | users | progress"]
+    EDIT["editor store<br/>in-memory annotations + selection"]
+    HIST["history store<br/>undo/redo + the ONLY place edits hit the API"]
+    COLLAB["collab.js<br/>live-collaboration WebSocket client"]
+  end
+
+  subgraph BACKEND["FastAPI backend (Python)"]
+    SEC["core/security<br/>decode JWT | current_user | require_admin"]
+    MEMB["services/membership<br/>is this user allowed on this project?"]
+    subgraph ROUTERS["api routers, grouped by domain"]
+      A["auth/<br/>login · logout · me · users"]
+      W["workspace/<br/>projects · images · annotations"]
+      D["dataset/<br/>versions · splits · workflow · export"]
+      C["collaboration/<br/>ws (rooms) · locks (legacy)"]
+      M["admin/<br/>dashboard · activity feed"]
+    end
+    ACT["services/activity<br/>writes one audit row per mutation"]
+    MET["services/metrics + export<br/>IoU, COCO/YOLO writers"]
+  end
+
+  PG[("PostgreSQL<br/>users, projects, members, labels,<br/>versions, images(meta), annotations,<br/>image_locks, activity_log")]
+  FS[("Server disk<br/>image files + export bundles")]
+
+  UI --> EDIT
+  EDIT --> HIST
+  UI -->|"reads: GET /api/..."| SEC
+  HIST -->|"writes: POST/PATCH/DELETE /api/annotations"| SEC
+  HIST -->|"after save: notify 'changed'"| COLLAB
+  COLLAB <-->|"ws /ws/images/:id (presence + change pings)"| C
+  SEC --> ROUTERS
+  ROUTERS --> MEMB
+  ROUTERS --> ACT
+  ROUTERS --> PG
+  MEMB --> PG
+  ACT --> PG
+  M --> MET
+  MET --> PG
+  W -->|"upload + serve image bytes"| FS
+  D -->|"export COCO / YOLO / folder"| FS
