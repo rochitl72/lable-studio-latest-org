@@ -16,7 +16,6 @@ import {
   updateImageStatus,
 } from "../../lib/api/client";
 import ReviewBar from "./ReviewBar";
-import { connectCollab, disconnectCollab } from "../../lib/collab";
 import { getCurrentUser } from "../../lib/auth";
 import OnboardingGuide, { shouldShowOnboarding } from "./OnboardingGuide";
 import ToolTipButton from "../common/ToolTipButton";
@@ -137,7 +136,6 @@ export default function AnnotateView() {
   const [keypointTemplate, setKeypointTemplate] = useState("");
   const [currentImage, setCurrentImage] = useState(null);
   const [projectImages, setProjectImages] = useState([]);
-  const [presence, setPresence] = useState([]);
   const [showGuide, setShowGuide] = useState(shouldShowOnboarding);
   const [magnifierPoint, setMagnifierPoint] = useState(null);
   const [magnifierZoom, setMagnifierZoom] = useState(() => {
@@ -174,24 +172,6 @@ export default function AnnotateView() {
       setAnnotations(anns);
     })();
   }, [pid, iid]);
-
-  // Live collaboration: join this image's room. When someone else changes an
-  // annotation we re-fetch from the server (the source of truth); presence
-  // tells us who else is here.
-  useEffect(() => {
-    if (!Number.isFinite(iid)) return;
-    connectCollab(iid, {
-      onPresence: setPresence,
-      onRemoteChange: async () => {
-        try {
-          setAnnotations(await listAnnotations(iid));
-        } catch {
-          /* ignore transient fetch errors */
-        }
-      },
-    });
-    return () => disconnectCollab();
-  }, [iid]);
 
   useEffect(() => {
     if (activeTool !== "polygon") setMagnifierPoint(null);
@@ -397,24 +377,6 @@ export default function AnnotateView() {
         <button className="btn-text" onClick={() => setShowGuide(true)}>
           Quick guide
         </button>
-        {(() => {
-          const meId = getCurrentUser()?.id;
-          const others = presence.filter((u) => u.user_id !== meId);
-          if (others.length === 0) return null;
-          return (
-            <div className="presence-bar" title="Also annotating this image">
-              <span className="presence-dot" />
-              {others.map((u) => (
-                <span key={u.user_id} className="presence-name">
-                  {u.username}
-                </span>
-              ))}
-              <span className="presence-label">
-                also here — changes sync live
-              </span>
-            </div>
-          );
-        })()}
       </div>
 
       <div className="annotate-main">

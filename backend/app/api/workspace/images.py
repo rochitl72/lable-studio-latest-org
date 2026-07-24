@@ -31,7 +31,7 @@ from app.core.config import settings
 from app.core.security import current_user, current_user_or_cookie, require_admin
 from app.db.database import get_db
 from app.models import Action, DatasetVersion, Image, Project, User, utcnow
-from app.services import activity, membership
+from app.services import activity, membership, storage
 
 log = logging.getLogger("annoforge.images")
 
@@ -118,6 +118,18 @@ async def upload_images(
     if not project:
         raise HTTPException(404, "Project not found")
 
+    # A project's files live under its assigned user's folder, so the project
+    # must have an assigned user before any images can be uploaded to it.
+    if not project.assigned_user_id:
+        raise HTTPException(
+            409,
+            "Assign a user to this project before uploading images "
+            "(files are stored under the assigned user's folder).",
+        )
+    owner = await db.get(User, project.assigned_user_id)
+    if not owner:
+        raise HTTPException(409, "The project's assigned user no longer exists.")
+
     if len(files) > settings.MAX_FILES_PER_UPLOAD:
         raise HTTPException(
             413,
@@ -125,8 +137,7 @@ async def upload_images(
             f"(got {len(files)}, limit {settings.MAX_FILES_PER_UPLOAD}).",
         )
 
-    project_dir = settings.STORAGE_DIR / f"project_{project_id}"
-    project_dir.mkdir(exist_ok=True, parents=True)
+    storage.ensure_project_dirs(owner.id, owner.username, project.id, project.name)
 
     version_id = project.active_version_id
     if not version_id:
@@ -150,14 +161,14 @@ async def upload_images(
             )
             continue
 
-        # Shard by the first two hex chars of the UUID so no single directory
-        # accumulates tens of thousands of files (slow on most filesystems).
-        # Layout: storage/project_{id}/{ab}/{ab...uuid}.ext
+        # Store under the assigned user's project folder, sharded by the first
+        # two hex chars of the UUID so no single directory accumulates tens of
+        # thousands of files. Layout:
+        #   storage/users/{owner}/projects/{project}/images/{ab}/{uuid}.ext
         unique_hex = uuid.uuid4().hex
-        unique = f"{unique_hex}{ext}"
-        shard_dir = project_dir / unique_hex[:2]
-        shard_dir.mkdir(exist_ok=True, parents=True)
-        target = shard_dir / unique
+        target = storage.image_target_path(
+            owner.id, owner.username, project.id, project.name, unique_hex, ext,
+        )
 
         # 2. Stream to disk with a hard size cap, so an oversized upload can
         #    never be held in memory or fill the volume.

@@ -9,7 +9,7 @@ sync happen automatically.
 | `main.jsx` | Routes (React Router). Gates `/admin/*` to admins. |
 | `App.jsx` | App shell — header, role-aware nav, forced password-change modal. |
 | `lib/auth.js` | Session: JWT storage, cached current user, `isAdmin()`, `login()`, `logout()`. |
-| `lib/collab.js` | The live-collaboration WebSocket client (connect, notifyChange, presence, auto-reconnect). |
+| `lib/config.js` | Resolves the API base URL / WebSocket origin (same-origin by default, or an absolute backend via `VITE_API_BASE_URL`). |
 | `lib/api/client.js` | Every REST call — one small wrapper function per backend endpoint. |
 | `store/editor.js` | In-memory editor state (viewport, active tool, annotations, selection, drafts). |
 | `store/history.js` | Undo/redo command stack — **and the single place annotations are saved to the API** (also pings the collab socket). |

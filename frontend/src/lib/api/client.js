@@ -1,10 +1,15 @@
 // client.js — the single typed wrapper around every backend REST call.
-// Centralises the /api base URL, attaches the bearer token, and logs the user
+// Centralises the API base URL, attaches the bearer token, and logs the user
 // out automatically on a 401. Every component talks to the server through here.
+//
+// BASE comes from lib/config.js: "/api" (same-origin, the default) unless
+// VITE_API_BASE_URL was set at build time to point at a separately-hosted
+// backend — see config.js for the full explanation.
 
 import { getToken, logout } from "../auth";
+import { API_BASE } from "../config";
 
-const BASE = "/api";
+const BASE = API_BASE;
 
 export class ApiError extends Error {
   constructor(message, status) {
@@ -65,7 +70,7 @@ async function req(path, init) {
 
 export const checkApiHealth = async () => {
   try {
-    const r = await fetch("/api/projects", {
+    const r = await fetch(`${BASE}/projects`, {
       headers: authHeaders(),
       signal: AbortSignal.timeout(4000),
     });
@@ -225,16 +230,17 @@ export const changePassword = (currentPassword, newPassword) =>
     }),
   });
 
-// ─── Project membership (admin) ──────────────────────────────────────
-export const listMembers = (projectId) =>
-  req(`/projects/${projectId}/members`);
-export const addMember = (projectId, userId) =>
-  req(`/projects/${projectId}/members`, {
-    method: "POST",
+// ─── Project assignment (admin) ──────────────────────────────────────
+// One user per project. GET reads the current assignee; PUT sets or changes it
+// (pass user_id: null to clear). Reassigning moves the project's files to the
+// new owner on the server side.
+export const getAssignee = (projectId) =>
+  req(`/projects/${projectId}/assignee`);
+export const setAssignee = (projectId, userId) =>
+  req(`/projects/${projectId}/assignee`, {
+    method: "PUT",
     body: JSON.stringify({ user_id: userId }),
   });
-export const removeMember = (projectId, userId) =>
-  req(`/projects/${projectId}/members/${userId}`, { method: "DELETE" });
 
 // ─── Dashboard (admin) ───────────────────────────────────────────────
 const qp = (projectId) => (projectId ? `?project_id=${projectId}` : "");
@@ -257,10 +263,3 @@ export const listActivity = (params = {}) => {
   return req(`/activity${q ? `?${q}` : ""}`);
 };
 export const userActivity = (userId) => req(`/activity/users/${userId}`);
-
-// ─── Image locks (collaboration) ─────────────────────────────────────
-export const acquireLock = (imageId) =>
-  req(`/images/${imageId}/lock`, { method: "POST" });
-export const releaseLock = (imageId) =>
-  req(`/images/${imageId}/lock`, { method: "DELETE" });
-export const getLock = (imageId) => req(`/images/${imageId}/lock`);

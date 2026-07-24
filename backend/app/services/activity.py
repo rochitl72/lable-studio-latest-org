@@ -50,3 +50,22 @@ async def record(
             await db.commit()
     except Exception:
         log.exception("Failed to write activity log for action=%r", action)
+
+    # Mirror the action to the acting user's plain-text activity.log on disk
+    # (the "logs as files for backup" requirement). The Postgres table above
+    # remains the searchable source for the admin activity feed; this file is
+    # a human-readable per-user backup. Best-effort — never breaks the request.
+    if user is not None:
+        try:
+            from app.services import storage
+
+            bits = [action]
+            if project_id is not None:
+                bits.append(f"project={project_id}")
+            if image_id is not None:
+                bits.append(f"image={image_id}")
+            if annotation_id is not None:
+                bits.append(f"annotation={annotation_id}")
+            storage.append_activity_log(user.id, user.username, " ".join(bits))
+        except Exception:
+            log.exception("Failed to mirror activity to file for action=%r", action)

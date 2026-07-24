@@ -18,12 +18,24 @@ from app.core.config import settings
 from app.core.security import current_user, require_admin, require_reviewer
 from app.db.database import get_db
 from app.models import (
-    Action, ActivityLog, Annotation, Image, ImageLock, Project, User, utcnow,
+    Action, ActivityLog, Annotation, Image, Project, User, utcnow,
 )
 from app.services import activity
 from app.services.metrics import iou_matrix, pairwise_agreement
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
+
+
+def _images_of_user(user_id: int):
+    """Subquery: image ids in projects assigned to this user.
+
+    Under the single-user-per-project model there is no per-image assignment;
+    an image "belongs" to a user through its project's assigned_user_id. The
+    dashboards use this in place of the old `Image.assigned_to == user`.
+    """
+    return select(Image.id).join(Project, Image.project_id == Project.id).where(
+        Project.assigned_user_id == user_id
+    )
 
 STATUSES = (
     "unannotated", "in_progress", "annotated",
@@ -59,7 +71,7 @@ async def overview(
     remaining = total - done
 
     aq = select(func.count()).select_from(Annotation)
-    uq = select(func.count()).select_from(User).where(User.is_active.is_(True))
+    uq = select(func.count()).select_from(User).where(User.status == "active")
     if project_id:
         aq = aq.join(Image, Annotation.image_id == Image.id).where(
             Image.project_id == project_id
@@ -145,7 +157,7 @@ async def contributors(
 ):
     """Per-user contribution table."""
     users = (
-        await db.execute(select(User).where(User.is_active.is_(True)).order_by(User.username))
+        await db.execute(select(User).where(User.status == "active").order_by(User.username))
     ).scalars().all()
 
     today = utcnow().date()
@@ -178,11 +190,13 @@ async def contributors(
         week_count = sum(1 for r in recent if r.action == Action.ANNOTATION_CREATE)
 
         assigned = await db.scalar(
-            select(func.count()).select_from(Image).where(Image.assigned_to == u.id)
+            select(func.count()).select_from(Image).where(
+                Image.id.in_(_images_of_user(u.id))
+            )
         ) or 0
         approved = await db.scalar(
             select(func.count()).select_from(Image).where(
-                Image.assigned_to == u.id, Image.status == "approved"
+                Image.id.in_(_images_of_user(u.id)), Image.status == "approved"
             )
         ) or 0
 
@@ -215,7 +229,7 @@ async def quality(
     person worked on that a reviewer has ruled on, how many were sent back.
     """
     users = (
-        await db.execute(select(User).where(User.is_active.is_(True)))
+        await db.execute(select(User).where(User.status == "active"))
     ).scalars().all()
 
     # Project-wide average annotations per image, as a comparison baseline.
@@ -232,7 +246,9 @@ async def quality(
 
     rows = []
     for u in users:
-        base = select(func.count()).select_from(Image).where(Image.assigned_to == u.id)
+        base = select(func.count()).select_from(Image).where(
+            Image.id.in_(_images_of_user(u.id))
+        )
         if project_id:
             base = base.where(Image.project_id == project_id)
         approved = await db.scalar(base.where(Image.status == "approved")) or 0
@@ -370,60 +386,28 @@ async def agreement(
     }
 
 
-# ─── C4 · Assignment & workload ──────────────────────────────────────
-class AssignRequest(BaseModel):
-    image_ids: list[int]
-    user_id: int | None  # None clears the assignment
-
-
-@router.post("/assign")
-async def assign_images(
-    payload: AssignRequest,
-    db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_reviewer),
-):
-    """Assign a batch of images to an annotator."""
-    target = None
-    if payload.user_id is not None:
-        target = await db.get(User, payload.user_id)
-        if not target or not target.is_active:
-            raise HTTPException(404, "User not found or inactive")
-
-    updated = 0
-    for iid in payload.image_ids:
-        img = await db.get(Image, iid)
-        if not img:
-            continue
-        img.assigned_to = payload.user_id
-        img.assigned_at = utcnow() if payload.user_id else None
-        updated += 1
-
-    await activity.record(
-        db, admin, Action.IMAGE_ASSIGN,
-        details={
-            "assigned_to": target.username if target else None,
-            "count": updated,
-        },
-    )
-    await db.commit()
-    return {"ok": True, "updated": updated,
-            "assigned_to": target.username if target else None}
-
-
+# ─── C4 · Workload ───────────────────────────────────────────────────
+# Per-image assignment and image locks were removed with the multi-user model.
+# "Workload" is now measured over the projects assigned to each user.
 @router.get("/workload")
 async def workload(
     project_id: int | None = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_reviewer),
 ):
-    """Assigned vs completed per annotator, plus the unassigned backlog."""
+    """Per-annotator: images in their assigned projects, pending vs completed,
+    plus the count of images in projects that have no assigned user yet."""
     users = (
-        await db.execute(select(User).where(User.is_active.is_(True)).order_by(User.username))
+        await db.execute(
+            select(User).where(User.status == "active").order_by(User.username)
+        )
     ).scalars().all()
 
     rows = []
     for u in users:
-        base = select(func.count()).select_from(Image).where(Image.assigned_to == u.id)
+        base = select(func.count()).select_from(Image).where(
+            Image.id.in_(_images_of_user(u.id))
+        )
         if project_id:
             base = base.where(Image.project_id == project_id)
         assigned = await db.scalar(base) or 0
@@ -443,8 +427,11 @@ async def workload(
             "completion_pct": round(done / assigned * 100, 1) if assigned else 0.0,
         })
 
+    # Backlog: images in projects that have not been assigned to anyone.
     unassigned_q = select(func.count()).select_from(Image).where(
-        Image.assigned_to.is_(None)
+        Image.project_id.in_(
+            select(Project.id).where(Project.assigned_user_id.is_(None))
+        )
     )
     if project_id:
         unassigned_q = unassigned_q.where(Image.project_id == project_id)
@@ -466,6 +453,14 @@ async def review_queue(
     q = q.order_by(Image.created_at).limit(limit)
     images = (await db.execute(q)).scalars().all()
 
+    # Map each project to its assigned user's name, so the queue can show who
+    # owns each image (its project's assignee) without a per-image field.
+    proj_assignee = {
+        pid: uid
+        for pid, uid in (
+            await db.execute(select(Project.id, Project.assigned_user_id))
+        ).all()
+    }
     usernames = {
         u.id: u.username for u in (await db.execute(select(User))).scalars().all()
     }
@@ -481,33 +476,7 @@ async def review_queue(
             "project_id": img.project_id,
             "filename": img.filename,
             "status": img.status,
-            "assigned_to": usernames.get(img.assigned_to),
+            "assigned_to": usernames.get(proj_assignee.get(img.project_id)),
             "annotation_count": n or 0,
         })
     return {"queue": out, "count": len(out)}
-
-
-@router.get("/presence")
-async def presence(
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_reviewer),
-):
-    """Who is holding an image lock right now."""
-    from datetime import timezone
-
-    cutoff = utcnow() - timedelta(seconds=settings.LOCK_TIMEOUT_SECONDS)
-    locks = (await db.execute(select(ImageLock))).scalars().all()
-    usernames = {
-        u.id: u.username for u in (await db.execute(select(User))).scalars().all()
-    }
-    live = []
-    for lk in locks:
-        hb = _aware(lk.heartbeat_at)
-        if hb and hb >= cutoff:
-            live.append({
-                "user_id": lk.user_id,
-                "username": usernames.get(lk.user_id, ""),
-                "image_id": lk.image_id,
-                "since": lk.acquired_at,
-            })
-    return {"active": live, "count": len(live)}

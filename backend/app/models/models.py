@@ -58,12 +58,34 @@ class User(Base):
     full_name: Mapped[str] = mapped_column(String(200), default="")
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(20), default=Role.USER, index=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # Account status, chosen by an admin. We never hard-delete a user (that would
+    # orphan their authored annotations); instead an admin flips this between
+    # "active" and "deactivated". A deactivated user is refused at login with a
+    # clear message. `is_active` below is a convenience wrapper over this so the
+    # many places that read a boolean keep working.
+    status: Mapped[str] = mapped_column(String(20), default="active", index=True)
+
     # Set on the seeded admin (and any admin-created account) so the UI can force
     # a password change on first sign-in. Cleared once the password is changed.
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(TimestampTZ, default=utcnow)
     last_login_at: Mapped[datetime | None] = mapped_column(TimestampTZ, nullable=True)
+
+    # Status values.
+    STATUS_ACTIVE = "active"
+    STATUS_DEACTIVATED = "deactivated"
+
+    @property
+    def is_active(self) -> bool:
+        """True unless an admin has deactivated the account. Reads the `status`
+        column so existing boolean call sites (login checks, serialisers) keep
+        working after the switch from a boolean column to a status string."""
+        return self.status == self.STATUS_ACTIVE
+
+    @is_active.setter
+    def is_active(self, value: bool) -> None:
+        self.status = self.STATUS_ACTIVE if value else self.STATUS_DEACTIVATED
 
     @property
     def is_admin(self) -> bool:
@@ -104,6 +126,16 @@ class Project(Base):
     created_by: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+
+    # The single non-admin user this project is assigned to. One user per
+    # project (admins always have access regardless). Nullable: a project can
+    # exist unassigned, but it must be assigned before images can be uploaded,
+    # because a project's files live under its assigned user's folder on disk.
+    # ON DELETE SET NULL is defensive only — users are deactivated, not deleted.
+    assigned_user_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(TimestampTZ, default=utcnow)
 
     images: Mapped[list["Image"]] = relationship(
@@ -164,19 +196,20 @@ class Image(Base):
         Integer, ForeignKey("dataset_versions.id", ondelete="CASCADE"), nullable=True
     )
     filename: Mapped[str] = mapped_column(String(500), nullable=False)
+    # Absolute path to the original image file on disk. The bytes live on disk
+    # (under the assigned user's folder); only this path is stored in the DB.
     storage_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    # Absolute path to this image's annotations.json backup file on disk. The
+    # authoritative annotations are still the rows in the `annotations` table
+    # (so dashboards/exports stay fast); this file is a continuously-synced
+    # backup written on every annotation change. Null until first annotated.
+    annotations_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     width: Mapped[int] = mapped_column(Integer)
     height: Mapped[int] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(30), default="unannotated", index=True)
     split: Mapped[str] = mapped_column(String(10), default="train")
     sequence_id: Mapped[str] = mapped_column(String(64), default="")
     frame_index: Mapped[int] = mapped_column(Integer, default=0)
-
-    # Workload: who should annotate this.
-    assigned_to: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
-    )
-    assigned_at: Mapped[datetime | None] = mapped_column(TimestampTZ, nullable=True)
 
     # Review outcome, set by a reviewer or admin.
     reviewed_by: Mapped[int | None] = mapped_column(
@@ -227,54 +260,6 @@ class Annotation(Base):
     label: Mapped[Label] = relationship()
 
 
-class ProjectMember(Base):
-    """Which users may work on which project.
-
-    Membership is the access boundary: a non-member (who is not an admin) cannot
-    see or touch a project at all. Role stays global — this table only answers
-    "is this user allowed on this project", not "as what".
-    """
-
-    __tablename__ = "project_members"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    project_id: Mapped[int] = mapped_column(
-        ForeignKey("projects.id", ondelete="CASCADE"), index=True
-    )
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), index=True
-    )
-    added_at: Mapped[datetime] = mapped_column(TimestampTZ, default=utcnow)
-    added_by: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
-    )
-
-    __table_args__ = (
-        UniqueConstraint("project_id", "user_id", name="uq_project_member"),
-    )
-
-
-# ─── Collaboration ───────────────────────────────────────────────────
-class ImageLock(Base):
-    """Soft check-out. One annotator holds an image at a time.
-
-    Locks expire (see LOCK_TIMEOUT_SECONDS) so a closed laptop never strands
-    an image permanently.
-    """
-
-    __tablename__ = "image_locks"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    image_id: Mapped[int] = mapped_column(
-        ForeignKey("images.id", ondelete="CASCADE"), unique=True, index=True
-    )
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
-    acquired_at: Mapped[datetime] = mapped_column(TimestampTZ, default=utcnow)
-    heartbeat_at: Mapped[datetime] = mapped_column(TimestampTZ, default=utcnow)
-
-    __table_args__ = (UniqueConstraint("image_id", name="uq_image_lock"),)
-
-
 class ActivityLog(Base):
     """Append-only audit trail. Every mutation writes one row."""
 
@@ -311,6 +296,11 @@ class Action:
     USER_CREATE = "user.create"
     USER_UPDATE = "user.update"
     USER_DEACTIVATE = "user.deactivate"
+    USER_ACTIVATE = "user.activate"
+    # A project has a single assigned user now; assigning/clearing that user.
+    PROJECT_ASSIGN = "project.assign"
+    PROJECT_UNASSIGN = "project.unassign"
+    # Legacy multi-member actions, kept only so old audit rows still render.
     MEMBER_ADD = "project.member_add"
     MEMBER_REMOVE = "project.member_remove"
     PROJECT_CREATE = "project.create"

@@ -73,6 +73,17 @@ async def login(
             detail="Incorrect username or password",
         )
 
+    # Credentials are correct, but an admin has deactivated this account. Tell
+    # the user clearly instead of the generic wrong-password message, and let
+    # nobody in — no token, no session.
+    if not user.is_active:
+        await asyncio.sleep(0.3)
+        log.warning("Deactivated account attempted login: %r", payload.username)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account is deactivated. Contact your administrator.",
+        )
+
     user.last_login_at = utcnow()
     await activity.record(db, user, Action.LOGIN)
     await db.commit()

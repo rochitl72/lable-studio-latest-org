@@ -14,6 +14,15 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 
+# Optional: point the built frontend at a backend on a DIFFERENT host/port
+# instead of the default same-origin nginx-proxy setup. Vite only reads
+# VITE_-prefixed vars at build time, so it must be a build ARG, not a
+# container-start ENV. Pass it with:
+#   docker build --build-arg VITE_API_BASE_URL=http://192.168.1.50:8000 .
+# or via docker-compose.yml's `build.args:` (see docker-compose.external-db.yml).
+ARG VITE_API_BASE_URL=""
+ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
+
 # Build the production bundle into /app/dist.
 COPY . .
 RUN npm run build

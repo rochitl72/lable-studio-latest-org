@@ -3,7 +3,7 @@
 // current project; pulls live counts from the workflow-stats endpoint.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { workflowStats } from "../../lib/api/client";
+import { workflowStats, imageFileUrl } from "../../lib/api/client";
 import { ChevronLeft, ChevronRight, Images } from "lucide-react";
 
 const FILTERS = [
@@ -124,7 +124,7 @@ export default function ImageGallerySidebar({
             onClick={() => onSelectImage(img)}
           >
             <img
-              src={`/api/projects/${projectId}/images/${img.id}/file`}
+              src={imageFileUrl(projectId, img.id)}
               alt={img.filename}
               loading="lazy"
             />

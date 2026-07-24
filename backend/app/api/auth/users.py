@@ -17,8 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.security import current_user, hash_password, require_admin
 from app.db.database import get_db
-from app.models import Action, Annotation, Image, Role, User
-from app.services import activity
+from app.models import Action, Annotation, Image, Project, Role, User
+from app.services import activity, storage
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
@@ -30,6 +30,7 @@ class UserOut(BaseModel):
     full_name: str
     role: str
     is_active: bool
+    status: str
 
     class Config:
         from_attributes = True
@@ -85,6 +86,9 @@ async def create_user_row(
     )
     db.add(user)
     await db.flush()
+    # Create this account's on-disk home folder immediately, so their storage
+    # tree exists the moment the account does (per the per-user storage model).
+    storage.ensure_user_dir(user.id, user.username)
     return user
 
 
@@ -182,7 +186,7 @@ async def _guard_last_admin(db: AsyncSession, user: User) -> None:
     remaining = await db.scalar(
         select(func.count())
         .select_from(User)
-        .where(User.role == Role.ADMIN, User.is_active.is_(True), User.id != user.id)
+        .where(User.role == Role.ADMIN, User.status == "active", User.id != user.id)
     )
     if not remaining:
         raise HTTPException(
@@ -220,28 +224,44 @@ async def my_stats(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
 ):
-    """Any user can see their own numbers; admins get the team view elsewhere."""
+    """Any user can see their own numbers; admins get the team view elsewhere.
+
+    Under the single-user-per-project model, "assigned" work is measured over
+    the projects assigned to this user rather than per-image assignment.
+    """
     annotations = await db.scalar(
         select(func.count()).select_from(Annotation).where(Annotation.created_by == user.id)
     )
-    assigned = await db.scalar(
-        select(func.count()).select_from(Image).where(Image.assigned_to == user.id)
-    )
-    approved = await db.scalar(
-        select(func.count())
-        .select_from(Image)
-        .where(Image.assigned_to == user.id, Image.status == "approved")
-    )
-    rejected = await db.scalar(
-        select(func.count())
-        .select_from(Image)
-        .where(Image.assigned_to == user.id, Image.status == "rejected")
-    )
+
+    # Projects assigned to this user, and the images inside them.
+    project_ids = [
+        r[0]
+        for r in (
+            await db.execute(
+                select(Project.id).where(Project.assigned_user_id == user.id)
+            )
+        ).all()
+    ]
+    projects_assigned = len(project_ids)
+
+    async def _img_count(*conds) -> int:
+        if not project_ids:
+            return 0
+        q = select(func.count()).select_from(Image).where(
+            Image.project_id.in_(project_ids), *conds
+        )
+        return (await db.scalar(q)) or 0
+
+    total_images = await _img_count()
+    approved = await _img_count(Image.status == "approved")
+    rejected = await _img_count(Image.status == "rejected")
+
     return {
         "username": user.username,
         "role": user.role,
         "annotations_created": annotations or 0,
-        "images_assigned": assigned or 0,
-        "images_approved": approved or 0,
-        "images_rejected": rejected or 0,
+        "projects_assigned": projects_assigned,
+        "images_assigned": total_images,   # images in this user's projects
+        "images_approved": approved,
+        "images_rejected": rejected,
     }

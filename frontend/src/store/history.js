@@ -7,10 +7,6 @@
 // / updateAnnotation / deleteAnnotation) before updating the local editor
 // store, so the server stays the source of truth.
 //
-// Each command also calls `notifyChange()` after a successful save. That pings
-// the live-collaboration WebSocket so everyone else viewing the same image
-// re-fetches and sees the change appear (see lib/collab.js).
-
 import { create } from "zustand";
 import {
   createAnnotation,
@@ -18,7 +14,6 @@ import {
   deleteAnnotation,
 } from "../lib/api/client";
 import { useEditor } from "./editor";
-import { notifyChange } from "../lib/collab";
 
 const MAX_HISTORY = 100;
 
@@ -78,13 +73,11 @@ export function makeCreateCmd(payload) {
       const ann = await createAnnotation(payload);
       createdId = ann.id;
       useEditor.getState().addAnnotation(ann);
-      notifyChange("create", ann.id);
     },
     undo: async () => {
       if (createdId == null) return;
       await deleteAnnotation(createdId);
       useEditor.getState().removeAnnotation(createdId);
-      notifyChange("delete", createdId);
     },
   };
 }
@@ -98,14 +91,12 @@ export function makeUpdateGeometryCmd(ann, newGeometry) {
       useEditor
         .getState()
         .updateAnnotationLocal(ann.id, { geometry: newGeometry });
-      notifyChange("update", ann.id);
     },
     undo: async () => {
       await updateAnnotation(ann.id, { geometry: oldGeometry });
       useEditor
         .getState()
         .updateAnnotationLocal(ann.id, { geometry: oldGeometry });
-      notifyChange("update", ann.id);
     },
   };
 }
@@ -118,7 +109,6 @@ export function makeDeleteCmd(ann) {
     do: async () => {
       await deleteAnnotation(ann.id);
       useEditor.getState().removeAnnotation(ann.id);
-      notifyChange("delete", ann.id);
     },
     undo: async () => {
       const restored = await createAnnotation({
@@ -131,7 +121,6 @@ export function makeDeleteCmd(ann) {
       });
       restoredId = restored.id;
       useEditor.getState().addAnnotation(restored);
-      notifyChange("create", restored.id);
     },
   };
 }

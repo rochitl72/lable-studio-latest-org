@@ -86,11 +86,19 @@ def _decode(token: str | None) -> dict | None:
 
 # ─── Authentication ──────────────────────────────────────────────────
 async def authenticate(db: AsyncSession, username: str, password: str) -> User | None:
+    """Return the user iff the username exists and the password is correct.
+
+    Note: this deliberately does NOT reject a deactivated account — it only
+    checks credentials. The login endpoint inspects `user.is_active` afterwards
+    so it can show a specific "account deactivated" message rather than the
+    generic "incorrect username or password". (Mid-session, `_user_from_token`
+    still rejects deactivated users, so deactivation takes effect immediately.)
+    """
     res = await db.execute(select(User).where(User.username == username))
     user = res.scalar_one_or_none()
-    if not user or not user.is_active:
-        # Hash anyway so a missing/disabled account isn't measurably faster
-        # to reject than a wrong password.
+    if not user:
+        # Hash anyway so a missing account isn't measurably faster to reject
+        # than a wrong password.
         verify_password(password, "$2b$12$" + "." * 53)
         return None
     if not verify_password(password, user.password_hash):

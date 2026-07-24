@@ -55,6 +55,10 @@ async def get_db():
 # Format: (table, column, Postgres column definition).
 _ADDITIVE_COLUMNS = [
     ("users", "must_change_password", "BOOLEAN NOT NULL DEFAULT FALSE"),
+    # Single-user-per-project + per-user storage model additions.
+    ("users", "status", "VARCHAR(20) NOT NULL DEFAULT 'active'"),
+    ("projects", "assigned_user_id", "INTEGER"),
+    ("images", "annotations_path", "VARCHAR(500)"),
 ]
 
 

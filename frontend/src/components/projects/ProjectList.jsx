@@ -13,6 +13,7 @@ import {
   exportYoloUrl,
   exportCocoUrl,
   exportLabeledZipUrl,
+  imageFileUrl,
   bulkUpdateStatus,
   workflowStats,
   autoSplit,
@@ -216,7 +217,7 @@ export default function ProjectList() {
                 <>
                   <button
                     className="del"
-                    title="Manage members"
+                    title="Assign user"
                     onClick={(e) => {
                       e.stopPropagation();
                       setMembersFor(p);
@@ -267,16 +268,26 @@ export default function ProjectList() {
               <div className="actions">
                 {admin && (
                   <>
-                    <label className="btn-primary">
-                      <Upload size={14} /> Upload
-                      <input
-                        type="file"
-                        multiple
-                        accept="image/*,video/*"
-                        onChange={onUpload}
-                        style={{ display: "none" }}
-                      />
-                    </label>
+                    {activeProject.assigned_user_id ? (
+                      <label className="btn-primary">
+                        <Upload size={14} /> Upload
+                        <input
+                          type="file"
+                          multiple
+                          accept="image/*,video/*"
+                          onChange={onUpload}
+                          style={{ display: "none" }}
+                        />
+                      </label>
+                    ) : (
+                      <button
+                        className="btn-primary"
+                        disabled
+                        title="Assign a user to this project first (Users icon in the sidebar) — images are stored under the assigned user's folder."
+                      >
+                        <Upload size={14} /> Upload
+                      </button>
+                    )}
                     <button
                       className="btn-secondary"
                       onClick={onAutoSplit}
@@ -364,7 +375,7 @@ export default function ProjectList() {
                   }}
                 >
                   <img
-                    src={`/api/projects/${activeProject.id}/images/${img.id}/file`}
+                    src={imageFileUrl(activeProject.id, img.id)}
                     alt={img.filename}
                   />
                   <div className="tile-overlay">
@@ -403,7 +414,22 @@ export default function ProjectList() {
       {membersFor && (
         <ProjectMembersPanel
           project={membersFor}
-          onClose={() => setMembersFor(null)}
+          onClose={async () => {
+            const forId = membersFor.id;
+            setMembersFor(null);
+            // Refresh so the upload gate reflects a newly-assigned user: pull
+            // the fresh project list and re-sync the open project from it.
+            try {
+              const fresh = await listProjects();
+              setProjects(fresh);
+              if (activeProject?.id === forId) {
+                const updated = fresh.find((x) => x.id === forId);
+                if (updated) setActive(updated);
+              }
+            } catch {
+              /* ignore refresh errors */
+            }
+          }}
         />
       )}
     </div>

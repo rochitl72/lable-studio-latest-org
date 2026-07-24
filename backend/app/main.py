@@ -16,7 +16,6 @@ from app.db.database import init_db
 from app.api.auth import auth, users
 from app.api.workspace import projects, images, annotations
 from app.api.dataset import versions, splits, workflow, export
-from app.api.collaboration import ws, locks
 from app.api.admin import dashboard, activity
 
 logging.basicConfig(
@@ -97,7 +96,6 @@ protected = [
     versions.router,
     workflow.router,
     users.router,
-    locks.router,
     activity.router,
     dashboard.router,
 ]
@@ -114,11 +112,6 @@ app.include_router(
 # `<a href>` downloads that can't send an Authorization header, so each endpoint
 # authenticates itself with the cookie-capable admin gate (see export.py).
 app.include_router(export.router)
-
-# Live-collaboration WebSocket. Not in the protected loop above: a WebSocket
-# can't carry an Authorization header, so it authenticates itself from a token
-# query parameter inside the handler.
-app.include_router(ws.router)
 
 
 @app.get("/api")

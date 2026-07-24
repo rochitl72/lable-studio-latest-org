@@ -30,12 +30,15 @@ async def ensure_bootstrap_admin() -> None:
             full_name="Administrator",
             password_hash=hash_password(settings.BOOTSTRAP_ADMIN_PASSWORD),
             role=Role.ADMIN,
-            is_active=True,
+            # status defaults to "active".
             # Force a password change on first sign-in if we seeded the built-in
             # default. If the operator set a real password, no need to nag.
             must_change_password=settings.using_default_credentials,
         )
         db.add(admin)
+        await db.flush()
+        from app.services import storage
+        storage.ensure_user_dir(admin.id, admin.username)
         await db.commit()
         log.info(
             "Created initial admin account %r. Change the password after "
@@ -74,8 +77,10 @@ async def ensure_seed_test_user() -> None:
             full_name="Test User",
             password_hash=hash_password(settings.BOOTSTRAP_TEST_PASSWORD),
             role=Role.USER,
-            is_active=True,
         )
         db.add(test_user)
+        await db.flush()
+        from app.services import storage
+        storage.ensure_user_dir(test_user.id, test_user.username)
         await db.commit()
         log.info("Created test account %r.", settings.BOOTSTRAP_TEST_USERNAME)

@@ -2,6 +2,14 @@
 //
 // Credentials are verified server-side; this module only holds the JWT the
 // server issues. Nothing secret lives in this file.
+//
+// API_BASE comes from lib/config.js — "/api" for the default same-origin
+// deployment, or an absolute backend URL if VITE_API_BASE_URL was set at
+// build time. When it's absolute (a different origin than the page), we also
+// pass `credentials: "include"` so the httpOnly auth cookie (used by <img>
+// tags to load protected files) still round-trips cross-origin.
+
+import { API_BASE } from "./config";
 
 const TOKEN_KEY = "rbg-studio-token";
 
@@ -41,8 +49,9 @@ export async function fetchCurrentUser() {
     return null;
   }
   try {
-    const r = await fetch("/api/auth/me", {
+    const r = await fetch(`${API_BASE}/auth/me`, {
       headers: { Authorization: `Bearer ${getToken()}` },
+      credentials: "include",
     });
     if (!r.ok) {
       currentUser = null;
@@ -61,9 +70,10 @@ export async function logout() {
   setToken(null);
   currentUser = null;
   try {
-    await fetch("/api/auth/logout", {
+    await fetch(`${API_BASE}/auth/logout`, {
       method: "POST",
       headers: token ? { Authorization: `Bearer ${token}` } : {},
+      credentials: "include",
     });
   } catch {
     // Already signed out locally; a failed call here doesn't matter.
@@ -77,10 +87,11 @@ export async function logout() {
 export async function login(username, password) {
   let r;
   try {
-    r = await fetch("/api/auth/login", {
+    r = await fetch(`${API_BASE}/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password }),
+      credentials: "include",
     });
   } catch {
     return { ok: false, error: "Cannot reach the server. Is the backend running?" };
@@ -90,7 +101,16 @@ export async function login(username, password) {
     return { ok: false, error: "Incorrect username or password." };
   }
   if (!r.ok) {
-    return { ok: false, error: `Login failed (${r.status}).` };
+    // Surface the server's specific message when it has one — e.g. the 403
+    // "Your account is deactivated. Contact your administrator."
+    let detail = `Login failed (${r.status}).`;
+    try {
+      const body = await r.json();
+      if (body.detail) detail = body.detail;
+    } catch {
+      /* keep the status-code fallback */
+    }
+    return { ok: false, error: detail };
   }
 
   const data = await r.json();
@@ -104,8 +124,9 @@ export async function login(username, password) {
 export async function verifyToken() {
   if (!getToken()) return false;
   try {
-    const r = await fetch("/api/auth/me", {
+    const r = await fetch(`${API_BASE}/auth/me`, {
       headers: { Authorization: `Bearer ${getToken()}` },
+      credentials: "include",
     });
     if (!r.ok) {
       setToken(null);

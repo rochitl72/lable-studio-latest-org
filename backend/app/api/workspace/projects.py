@@ -1,14 +1,15 @@
-"""Projects, labels, and project membership.
+"""Projects, labels, and project assignment.
 
 A *project* is the top-level container: it owns images, label classes, and
 dataset versions. This router handles creating/listing/deleting projects and
-their label classes, plus the membership endpoints an admin uses to decide who
-may work on a project.
+their label classes, plus the single-user assignment an admin uses to decide
+who works on a project.
 
 Access rules enforced here:
-  * Listing projects returns only the ones the caller belongs to (admins see
-    all). Membership is checked through `app.services.membership`.
-  * Creating/deleting projects and labels, and editing membership, are
+  * Listing projects returns only the one(s) assigned to the caller (admins see
+    all). Access is checked through `app.services.membership` (which, under the
+    single-user model, means "is the assigned user, or an admin").
+  * Creating/deleting projects and labels, and changing the assignee, are
     admin-only (`require_admin`).
 
 Every mutation writes an entry to the audit log via `app.services.activity`.
@@ -20,9 +21,9 @@ from sqlalchemy import select
 from app.core.security import current_user, require_admin
 from app.db.database import get_db
 from app.models import (
-    Action, DatasetVersion, Label, Project, ProjectMember, User,
+    Action, DatasetVersion, Image, Label, Project, Role, User,
 )
-from app.services import activity, membership
+from app.services import activity, membership, storage
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -38,6 +39,7 @@ class ProjectOut(BaseModel):
     name: str
     description: str
     task_type: str
+    assigned_user_id: int | None = None
 
     class Config:
         from_attributes = True
@@ -186,21 +188,23 @@ async def delete_label(
     return {"ok": True}
 
 
-# ─── Membership (admin-only) ─────────────────────────────────────────
-class MemberOut(BaseModel):
-    user_id: int
-    username: str
-    full_name: str
-    role: str
-    is_active: bool
+# ─── Assignment (admin-only) ─────────────────────────────────────────
+# One non-admin user per project. Assigning (or reassigning) a project changes
+# projects.assigned_user_id AND — because a project's files live under the
+# assigned user's folder — physically moves the project's file subtree to the
+# new owner and rewrites the affected image paths, all in one transaction.
+class AssigneeOut(BaseModel):
+    project_id: int
+    assigned_user_id: int | None
+    assigned_username: str | None
 
 
-class MemberAdd(BaseModel):
-    user_id: int
+class AssigneeSet(BaseModel):
+    user_id: int | None  # None clears the assignment
 
 
-@router.get("/{project_id}/members", response_model=list[MemberOut])
-async def list_members(
+@router.get("/{project_id}/assignee", response_model=AssigneeOut)
+async def get_assignee(
     project_id: int,
     db: AsyncSession = Depends(get_db),
     _: User = Depends(require_admin),
@@ -208,79 +212,88 @@ async def list_members(
     project = await db.get(Project, project_id)
     if not project:
         raise HTTPException(404, "Project not found")
-    rows = await db.execute(
-        select(User)
-        .join(ProjectMember, ProjectMember.user_id == User.id)
-        .where(ProjectMember.project_id == project_id)
-        .order_by(User.username)
+    username = None
+    if project.assigned_user_id:
+        u = await db.get(User, project.assigned_user_id)
+        username = u.username if u else None
+    return AssigneeOut(
+        project_id=project.id,
+        assigned_user_id=project.assigned_user_id,
+        assigned_username=username,
     )
-    return [
-        MemberOut(
-            user_id=u.id, username=u.username, full_name=u.full_name,
-            role=u.role, is_active=u.is_active,
-        )
-        for u in rows.scalars().all()
-    ]
 
 
-@router.post("/{project_id}/members", response_model=MemberOut)
-async def add_member(
+@router.put("/{project_id}/assignee", response_model=AssigneeOut)
+async def set_assignee(
     project_id: int,
-    payload: MemberAdd,
+    payload: AssigneeSet,
     db: AsyncSession = Depends(get_db),
     admin: User = Depends(require_admin),
 ):
     project = await db.get(Project, project_id)
     if not project:
         raise HTTPException(404, "Project not found")
-    target = await db.get(User, payload.user_id)
-    if not target:
-        raise HTTPException(404, "User not found")
 
-    existing = await db.scalar(
-        select(ProjectMember.id).where(
-            ProjectMember.project_id == project_id,
-            ProjectMember.user_id == payload.user_id,
-        )
-    )
-    if not existing:
-        db.add(ProjectMember(
-            project_id=project_id, user_id=payload.user_id, added_by=admin.id,
-        ))
-        await activity.record(
-            db, admin, Action.MEMBER_ADD,
-            project_id=project_id,
-            details={"user_id": target.id, "username": target.username},
-        )
-        await db.commit()
-    return MemberOut(
-        user_id=target.id, username=target.username, full_name=target.full_name,
-        role=target.role, is_active=target.is_active,
-    )
+    old_id = project.assigned_user_id
+    new_id = payload.user_id
 
+    # Validate the incoming user (must exist, be active, and be a plain user —
+    # admins already have access to every project, so assigning to one is moot).
+    new_user = None
+    if new_id is not None:
+        new_user = await db.get(User, new_id)
+        if not new_user or not new_user.is_active:
+            raise HTTPException(404, "User not found or deactivated")
+        if new_user.is_admin:
+            raise HTTPException(400, "Assign a project to a plain user, not an admin.")
 
-@router.delete("/{project_id}/members/{user_id}")
-async def remove_member(
-    project_id: int,
-    user_id: int,
-    db: AsyncSession = Depends(get_db),
-    admin: User = Depends(require_admin),
-):
-    member = await db.scalar(
-        select(ProjectMember).where(
-            ProjectMember.project_id == project_id,
-            ProjectMember.user_id == user_id,
+    if old_id == new_id:
+        return AssigneeOut(
+            project_id=project.id, assigned_user_id=new_id,
+            assigned_username=new_user.username if new_user else None,
         )
-    )
-    if not member:
-        return {"ok": True, "removed": False}
-    target = await db.get(User, user_id)
-    await db.delete(member)
+
+    old_user = await db.get(User, old_id) if old_id else None
+
+    # Move the project's files on disk to follow the new owner (Option A), then
+    # rewrite the stored paths so the DB matches. If there is no old owner (a
+    # first-time assignment) there are no files yet — nothing to move.
+    if old_user and new_user:
+        old_prefix = str(storage.project_dir(
+            old_user.id, old_user.username, project.id, project.name))
+        new_prefix = str(storage.project_dir(
+            new_user.id, new_user.username, project.id, project.name))
+        storage.move_project_dir(
+            old_user.id, old_user.username,
+            new_user.id, new_user.username,
+            project.id, project.name,
+        )
+        # Rewrite every affected image path from the old owner prefix to the new.
+        imgs = (await db.execute(
+            select(Image).where(Image.project_id == project.id)
+        )).scalars().all()
+        for img in imgs:
+            if img.storage_path and img.storage_path.startswith(old_prefix):
+                img.storage_path = new_prefix + img.storage_path[len(old_prefix):]
+            if img.annotations_path and img.annotations_path.startswith(old_prefix):
+                img.annotations_path = new_prefix + img.annotations_path[len(old_prefix):]
+    elif new_user:
+        # First assignment: just make sure the new owner's folders exist.
+        storage.ensure_project_dirs(
+            new_user.id, new_user.username, project.id, project.name)
+
+    project.assigned_user_id = new_id
     await activity.record(
-        db, admin, Action.MEMBER_REMOVE,
-        project_id=project_id,
-        details={"user_id": user_id,
-                 "username": target.username if target else str(user_id)},
+        db, admin,
+        Action.PROJECT_ASSIGN if new_id else Action.PROJECT_UNASSIGN,
+        project_id=project.id,
+        details={
+            "from": old_user.username if old_user else None,
+            "to": new_user.username if new_user else None,
+        },
     )
     await db.commit()
-    return {"ok": True, "removed": True}
+    return AssigneeOut(
+        project_id=project.id, assigned_user_id=new_id,
+        assigned_username=new_user.username if new_user else None,
+    )

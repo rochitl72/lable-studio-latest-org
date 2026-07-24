@@ -9,6 +9,7 @@ Thumbs.db
 .env
 *.env
 !.env.example
+!.env.external-db.example
 
 # ─── Python ──────────────────────────────────────────────────
 __pycache__/
