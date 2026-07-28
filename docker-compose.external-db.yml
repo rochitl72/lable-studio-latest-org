@@ -78,7 +78,10 @@ services:
     ports:
       - "${WEB_PORT:-8080}:80"
     depends_on:
-      - backend
+      # Wait for the API's healthcheck (defined in backend/Dockerfile), not just
+      # for the container to exist — otherwise the first page load can 502.
+      backend:
+        condition: service_healthy
 
 volumes:
   storage:    # uploaded images

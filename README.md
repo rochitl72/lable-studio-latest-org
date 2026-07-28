@@ -8,8 +8,9 @@ the labels as **COCO JSON**, **YOLO**, or a ready-to-train **labeled bundle**
 (images + drawn overlays + labels).
 
 Built as a **FastAPI** (Python) backend + **React/Vite** frontend, backed by
-**PostgreSQL**, with role-based access, per-project user assignment, and live
-Google-Docs-style multi-user editing on the same image.
+**PostgreSQL**, with role-based access and one assigned annotator per project.
+
+You deploy it once on a server; everyone works in their browser at the same URL.
 
 > Internal project — RBG LABS · COERS (Centre of Excellence for Road Safety).
 
@@ -38,17 +39,24 @@ Google-Docs-style multi-user editing on the same image.
   raster **brush mask** with add/erase, select, resize, undo/redo.
 - **Two roles:** `admin` (full control) and `user` (annotates only what they're
   assigned). See [Roles](#roles-admin-vs-user).
-- **Per-project assignment:** admins create accounts and add users to specific
-  projects; a user only ever sees projects they're a member of.
-- **Live collaboration:** several people can annotate the *same* image at once;
-  changes and presence sync over a WebSocket, while PostgreSQL stays the single
-  source of truth.
+- **One annotator per project:** an admin creates accounts and assigns each
+  project to exactly one user. That user sees only their assigned projects;
+  admins see everything. Reassigning a project moves its files to the new owner.
+- **Per-user file storage:** every project's images, annotation backups and
+  exports live under the assigned user's own folder on disk.
 - **Review workflow:** mark images In-progress / Done / Needs-review /
-  Approved / Rejected; approved images lock against further edits.
+  Approved / Rejected; approved images are frozen to everyone but an admin.
 - **Dataset versions & splits:** snapshot a dataset, auto-split train/val/test.
 - **Exports:** COCO JSON, YOLO zip, and a one-click "labeled bundle" zip —
-  available to any project member, not just admins.
-- **Full audit log:** every mutation writes a row to `activity_log`.
+  available to the assigned user as well as admins.
+- **Full audit log:** every mutation writes a row to `activity_log`, mirrored to
+  a plain-text `activity.log` in the user's folder.
+
+**Not included:** simultaneous editing of the same image by two people, and
+ML-assisted auto-labelling (SAM / GroundingDINO). Both existed in an earlier
+version of this project and were deliberately removed; see the
+[archive repository](https://github.com/rochitl72/RBG-Label-Studio) if you need
+them back.
 
 ---
 
@@ -66,21 +74,21 @@ lable-studio-latest-org/
 │   │   │   ├── auth/           #   login, users
 │   │   │   ├── workspace/      #   projects, images, annotations
 │   │   │   ├── dataset/        #   versions, splits, workflow, export
-│   │   │   ├── collaboration/  #   live-edit WebSocket, (legacy) locks
 │   │   │   └── admin/          #   dashboards, activity feed
-│   │   └── services/           # membership, activity log, metrics, export
+│   │   └── services/           # membership, storage, activity log, metrics, export
 │   ├── alembic/                # database migrations
 │   ├── requirements.txt
 │   ├── Dockerfile
+│   ├── entrypoint.sh           # waits for DB → alembic upgrade head → uvicorn
 │   └── .env.example            # every backend setting, documented
 ├── frontend/                    # React + Vite single-page app
 │   ├── src/
 │   │   ├── components/         # UI, grouped: annotate/ admin/ auth/ projects/ …
 │   │   ├── store/             # Zustand stores (editor state, undo/redo history)
-│   │   ├── lib/              # api client, auth helper, collaboration client
+│   │   ├── lib/              # api client, auth helper, API base-URL config
 │   │   └── utils/           # geometry, RLE mask encode/decode, colors
 │   ├── Dockerfile             # multi-stage build → nginx
-│   └── nginx.conf            # serves the SPA + proxies /api and /ws
+│   └── nginx.conf            # serves the SPA + proxies /api and /health
 ├── docs/                        # architecture, data-flow, diagrams, planning
 ├── scripts/                     # ops helpers (e.g. backup.sh)
 ├── docker-compose.yml           # one-command full-stack deployment
@@ -100,13 +108,13 @@ Two diagrams and a detailed walkthrough live in `docs/`:
 - **`docs/diagrams/backend_flow.mermaid`** — request-flow diagram.
 - **`docs/diagrams/db_er.mermaid`** — full database entity-relationship model.
 
-In one paragraph: the browser talks to FastAPI over REST plus one WebSocket.
-FastAPI persists **all structured data** (accounts, projects, memberships,
-images metadata, annotations, audit log) in **PostgreSQL**, and stores the
-**image files themselves on disk** (the DB only keeps the path). Every request
-passes the same gate order — authenticate (JWT) → role check → project
-membership → do the work → write an audit row. Annotations are saved the moment
-you finish a shape; nothing is buffered in the browser.
+In one paragraph: the browser talks to FastAPI over plain REST — there is no
+WebSocket. FastAPI persists **all structured data** (accounts, projects,
+assignments, image metadata, annotations, audit log) in **PostgreSQL**, and
+stores the **image files themselves on disk** (the DB only keeps the path).
+Every request passes the same gate order — authenticate (JWT) → role check →
+project access → do the work → write an audit row. Annotations are saved the
+moment you finish a shape; nothing is buffered in the browser.
 
 ---
 
@@ -146,12 +154,21 @@ docker compose down -v          # stop AND delete all data volumes
 
 ## Run locally for development
 
-For hacking on the code with hot-reload. No Docker needed; uses **SQLite** so
-you don't even need a database server.
+For hacking on the code with hot-reload. The app is **PostgreSQL-only**, so dev
+needs a Postgres too — the quickest is a throwaway one in Docker (the app itself
+still runs from source with hot-reload).
 
-**Prerequisites:** Python 3.10+, Node.js 18+ LTS, Git.
+**Prerequisites:** Python 3.10+, Node.js 18+ LTS, Docker (for Postgres), Git.
 
-### 1. Backend (terminal 1)
+### 1. Start a local Postgres (terminal 1)
+
+```bash
+docker run --name rbg-dev-pg -e POSTGRES_USER=annoforge \
+  -e POSTGRES_PASSWORD=annoforge -e POSTGRES_DB=annoforge \
+  -p 5432:5432 -d postgres:16-alpine
+```
+
+### 2. Backend (terminal 2)
 
 ```bash
 cd backend
@@ -160,21 +177,29 @@ source .venv/bin/activate            # Windows: .venv\Scripts\activate
 
 pip install -r requirements.txt
 
-# use a local SQLite file instead of Postgres for dev:
-echo 'DATABASE_URL=sqlite+aiosqlite:///./annoforge_local.db' >> .env
-echo 'SECRET_KEY=dev-secret-not-for-production' >> .env
+cat > .env <<'EOF'
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_USER=annoforge
+POSTGRES_PASSWORD=annoforge
+POSTGRES_DB=annoforge
+SECRET_KEY=dev-secret-not-for-production
+EOF
 
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-On first start the backend auto-creates the tables and seeds two accounts:
+On first start the backend applies the migrations and seeds one admin account:
 
 | Username | Password | Role  |
 |----------|----------|-------|
 | `admin`  | `123`    | admin |
-| `test`   | `123`    | user  |
 
-### 2. Frontend (terminal 2)
+Add `SEED_TEST_USER=true` to that `.env` if you also want a plain-user `test` /
+`123` account to try the non-admin view. It is **off by default** so it can
+never accidentally ship to a deployment.
+
+### 3. Frontend (terminal 3)
 
 ```bash
 cd frontend
@@ -182,8 +207,17 @@ npm install
 npm run dev
 ```
 
-Open **http://localhost:5173**. Vite proxies `/api` and `/ws` to the backend on
-`:8000`, so you talk to one origin.
+Open **http://localhost:5173**. Vite proxies `/api` to the backend on `:8000`,
+so you talk to one origin.
+
+> Migrations: the Docker deployment runs `alembic upgrade head` automatically on
+> container start (see `backend/entrypoint.sh`). Running from source as above,
+> the app creates any missing tables itself on first boot — but if you change
+> the models, generate and apply a migration:
+> `alembic revision --autogenerate -m "..."` then `alembic upgrade head`.
+
+Image files and annotation/log backups are written under `backend/storage/` in
+dev; the database holds only the paths.
 
 ---
 
@@ -223,6 +257,11 @@ The backend container runs with `ENVIRONMENT=production`, which **refuses to
 start** if `SECRET_KEY` is unset or the admin password is left at the default —
 a deliberate fail-loud guard. In production the minimum password length is also
 forced back up to 8.
+
+On start the backend waits for PostgreSQL, runs `alembic upgrade head`, then
+launches the API (`backend/entrypoint.sh`). The web container waits for the
+API's healthcheck to pass before accepting traffic, so the first page load
+never 502s.
 
 ### 3. Launch
 
@@ -268,7 +307,7 @@ secrets are in the repo-root **`.env.example`**. Highlights:
 | `ENVIRONMENT` | `development` (relaxed) or `production` (fail-loud guards on). |
 | `BOOTSTRAP_ADMIN_USERNAME` / `_PASSWORD` | First admin, seeded on an empty DB. |
 | `SEED_TEST_USER` | Seed a demo `test` user — set `false` in production. |
-| `DATABASE_URL` | Full DB URL. Leave blank to build one from the `POSTGRES_*` vars, or point at `sqlite+aiosqlite:///./file.db` for local dev. |
+| `DATABASE_URL` | Full PostgreSQL URL (`postgresql+asyncpg://…`). Leave blank to build one from the `POSTGRES_*` vars. |
 | `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` | Connection pool sizing. |
 | `COOKIE_SECURE` | `true` when served over HTTPS. |
 | `MIN_PASSWORD_LENGTH` | Dev convenience; auto-raised to 8 in production. |
@@ -284,8 +323,8 @@ exposing the app to anyone.
 |---|:--:|:--:|
 | Create / manage user accounts | ✅ | — |
 | Create / delete projects | ✅ | — |
-| Upload / delete images | ✅ | — |
-| Assign users to projects | ✅ | — |
+| Upload images | ✅ | — |
+| Assign a project to a user | ✅ | — |
 | Add / edit / delete annotations | ✅ (any) | ✅ (own, on assigned projects) |
 | Approve / reject images | ✅ | — |
 | Dataset versions / splits | ✅ | — |
@@ -293,16 +332,23 @@ exposing the app to anyone.
 | View team dashboards & activity | ✅ | — |
 | See personal progress page | ✅ | ✅ |
 
-A plain user can only reach a project after an admin adds them to it; everything
-else on that project (upload, review, delete) stays admin-only.
+A plain user can only reach a project after an admin assigns it to them, and a
+project has exactly one assigned user at a time. Everything else on that project
+(upload, review, versions, delete) stays admin-only.
+
+Accounts are never hard-deleted — an admin deactivates them instead, so their
+past annotations keep a valid author. The last active admin cannot be demoted or
+deactivated.
 
 ---
 
 ## Using the app
 
-1. Sign in and (as admin) **create a project**, then **Upload** images.
-2. Add label classes in the right panel (`+`).
-3. (As admin) open **Manage members** to assign users to the project.
+1. Sign in and (as admin) **create a project**, then assign it to a user — a
+   project must have an assigned user before images can be uploaded, because its
+   files live under that user's folder on disk.
+2. **Upload** images, then add label classes in the right panel (`+`).
+3. The assigned user signs in and sees the project on their home screen.
 4. Annotate with the toolbar — keyboard shortcuts:
    `B` box · `P` polygon · `E` ellipse · `K` brush · `J` keypoint ·
    `[` / `]` brush size · `X` toggle erase · `⌘/Ctrl+Z` undo.
@@ -315,8 +361,8 @@ Annotations save automatically the instant you finish a shape — there is no
 
 ## Exporting labels
 
-Any member of a project (admin or assigned user) can download its labels from
-the project header:
+An admin, or the project's assigned user, can download its labels from the
+project header:
 
 - **Labeled zip** — original images + overlay copies (labels drawn on) + YOLO
   `.txt` + one COCO json + `classes.txt` + `manifest.json`.
@@ -345,7 +391,7 @@ from cron on the server. For the Docker deployment, back up the `pgdata` and
 | `docs/DATA_FLOW.md` | Every action → where it's stored (per role). |
 | `docs/diagrams/backend_flow.mermaid` | Backend request-flow diagram. |
 | `docs/diagrams/db_er.mermaid` | Database ER model. |
-| `docs/planning/` | Original implementation & multi-user plans. |
+| `docs/planning/` | Historical plans. **Superseded** — these describe the earlier multi-user / desktop-launcher design, not the current app. |
 | `backend/app/README.md` | Backend folder map. |
 | `frontend/src/README.md` | Frontend folder map. |
 

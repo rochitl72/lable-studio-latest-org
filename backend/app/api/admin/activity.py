@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import current_user, require_reviewer
+from app.core.security import current_user, require_admin
 from app.db.database import get_db
 from app.models import ActivityLog, User, utcnow
 
@@ -84,7 +84,7 @@ async def export_activity_csv(
     action: str | None = None,
     days: int | None = Query(None, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_reviewer),
+    _: User = Depends(require_admin),
 ):
     """Download the filtered audit log as CSV."""
     since = utcnow() - timedelta(days=days) if days else None

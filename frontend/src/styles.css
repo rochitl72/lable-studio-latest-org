@@ -1448,25 +1448,7 @@ kbd {
 .modal-note { color: var(--muted); font-size: 13px; margin: 0 0 16px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
 
-.add-member-row { display: flex; gap: 8px; margin-bottom: 12px; }
-.add-member-row select { flex: 1; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 7px 8px; }
-.member-list { list-style: none; padding: 0; margin: 12px 0 0; }
-.member-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); }
 .btn-text.danger { color: #ef8a8a; }
-
-/* live-collab presence */
-.presence-bar { display: inline-flex; align-items: center; gap: 8px; margin-left: 16px; padding: 4px 10px; background: #14210f; border: 1px solid #2c4a1e; border-radius: 14px; font-size: 12px; }
-.presence-dot { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 6px #22c55e; animation: presence-pulse 2s infinite; }
-.presence-name { font-weight: 600; color: #cdeab8; }
-.presence-label { color: var(--muted); }
-@keyframes presence-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
-
-/* bulk member assignment */
-.bulk-add-list { max-height: 220px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; padding: 4px; margin-bottom: 8px; }
-.bulk-add-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 4px; cursor: pointer; font-size: 13px; }
-.bulk-add-row:hover { background: #151515; }
-.bulk-add-row input[type="checkbox"] { accent-color: var(--text); }
-.modal-subheading { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin: 16px 0 8px; }
 
 /* ═══════════════════════════════════════════════════════════════════════
    LIGHT · COLORFUL · FLOATING THEME  (overrides the dark base above)
@@ -1615,7 +1597,7 @@ aside.sidebar {
 .data-table tbody tr:hover { background: var(--primary-050); }
 .data-table select, .field input, .field select,
 .create-user-row input, .create-user-row select,
-.add-member-row select, .login-form input, .new-project input {
+.login-form input, .new-project input {
   background: #fff;
   border: 1px solid var(--border-hi);
   border-radius: 10px;
@@ -1635,14 +1617,6 @@ aside.sidebar {
 }
 .status-chip { background: #fff; }
 .status-chip.active { background: var(--primary); color: #fff; border-color: var(--primary); }
-
-/* ── Live-collab presence ──────────────────────────────────────────── */
-.presence-bar { background: #ecfdf5; border: 1px solid #bbf7d0; }
-.presence-name { color: #047857; }
-
-/* ── Members / bulk add ────────────────────────────────────────────── */
-.bulk-add-list { background: #fff; }
-.bulk-add-row:hover { background: var(--primary-050); }
 
 /* ── Misc dark leftovers → light ───────────────────────────────────── */
 .modal-backdrop { background: rgba(23, 32, 58, 0.35); backdrop-filter: blur(3px); }
@@ -1744,9 +1718,6 @@ body {
 .dock-icon-btn.dock-save { background: #6B4EFF; border-color: #6B4EFF; }
 .dock-icon-btn.dock-done { background: #21243a; color: #fff; border-color: #21243a; }
 .progress-bar { background: #eef1f7; }
-.presence-bar { background: #ecfdf5; border: 1px solid #bbf7d0; }
-.presence-name { color: #047857; }
-.bulk-add-row:hover { background: var(--primary-050); }
 .gallery-item img { background: #eef1f7; }
 
 /* Nav icons sit inline with their labels */

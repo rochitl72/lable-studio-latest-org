@@ -124,10 +124,15 @@ async def health():
     return {"status": "healthy"}
 
 
-# ─── Serve the built frontend (production) ─────────────────────────
-# `scripts/build.sh` runs `npm run build`, which writes frontend/dist.
-# When that folder exists we serve the app from this same process, so the
-# whole thing runs on one port with no separate web server or proxy.
+# ─── Serve the built frontend (optional single-process mode) ───────
+# The supported deployment (docker-compose) serves the frontend from its own
+# nginx container, so this block does nothing there — /frontend/dist is absent
+# inside the backend image and nginx owns the static files.
+#
+# It exists for the simpler case of running everything from one process on one
+# port with no separate web server: build the frontend with
+# `cd frontend && npm run build` (which writes frontend/dist), then start this
+# app from the repo root. If that folder exists, we serve it here.
 # In development the folder is absent — run `npm run dev` on 5173 instead.
 FRONTEND_DIST = settings.BASE_DIR.parent / "frontend" / "dist"
 
@@ -163,5 +168,11 @@ else:
             "name": "RBG Annotation Studio",
             "version": "0.3.0",
             "status": "ok",
-            "note": "Frontend not built. Run scripts/build.sh, or npm run dev for development.",
+            "note": (
+                "API is up. No frontend bundle is served from this process — "
+                "that is normal for the docker-compose deployment, where nginx "
+                "serves the UI. For single-process mode run "
+                "'cd frontend && npm run build' first; for development run "
+                "'npm run dev' on port 5173."
+            ),
         }

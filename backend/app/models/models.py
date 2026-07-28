@@ -1,13 +1,12 @@
 """SQLAlchemy ORM models.
 
-Types are declared Postgres-first: JSON columns become JSONB and timestamps
-are timezone-aware. `with_variant` keeps the same models loadable on SQLite so
-the test suite can run without a database server — production is Postgres.
+PostgreSQL-only. JSON columns are JSONB (binary, indexable) and timestamps are
+timezone-aware.
 """
 from datetime import datetime, timezone
 
 from sqlalchemy import (
-    Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text,
+    Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text,
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -15,8 +14,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.database import Base
 
-# JSONB on Postgres (indexable, binary), plain JSON elsewhere.
-JSONType = JSON().with_variant(JSONB, "postgresql")
+# JSONB on Postgres: binary and indexable.
+JSONType = JSONB
 
 
 def utcnow() -> datetime:
@@ -31,18 +30,12 @@ TimestampTZ = DateTime(timezone=True)
 class Role:
     """Global roles. Two tiers: a plain USER, and an ADMIN who can do everything.
 
-    The old three-tier ladder (annotator < reviewer < admin) was collapsed:
-    everything the reviewer role could do now belongs to admin. `ANNOTATOR` and
-    `REVIEWER` are kept as aliases only so old references don't break during the
-    migration — new code should use USER / ADMIN.
+    An earlier three-tier ladder (annotator < reviewer < admin) was collapsed:
+    everything the reviewer role could do now belongs to admin.
     """
 
     USER = "user"
     ADMIN = "admin"
-
-    # Backwards-compatible aliases (do not use in new code).
-    ANNOTATOR = USER
-    REVIEWER = ADMIN
 
     ALL = (USER, ADMIN)
     # Rank lets permission checks ask "at least admin?" without listing roles.

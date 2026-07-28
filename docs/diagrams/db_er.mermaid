@@ -1,6 +1,5 @@
 erDiagram
-  users ||--o{ project_members : "belongs to"
-  projects ||--o{ project_members : "grants access"
+  users ||--o{ projects : "assigned to (assigned_user_id)"
   users ||--o{ projects : "created"
   projects ||--o{ labels : "defines classes"
   projects ||--o{ dataset_versions : "snapshots"
@@ -9,7 +8,6 @@ erDiagram
   images ||--o{ annotations : "has"
   labels ||--o{ annotations : "classifies"
   users ||--o{ annotations : "authored (created_by/updated_by)"
-  images ||--o| image_locks : "checked out by"
   users ||--o{ activity_log : "acted"
 
   users {
@@ -17,16 +15,9 @@ erDiagram
     string username UK
     string password_hash
     string role "user or admin"
-    bool is_active
+    string status "active or deactivated"
     bool must_change_password
     datetime last_login_at
-  }
-  project_members {
-    int id PK
-    int project_id FK
-    int user_id FK
-    int added_by FK
-    datetime added_at
   }
   projects {
     int id PK
@@ -34,6 +25,7 @@ erDiagram
     string task_type
     int active_version_id FK
     int created_by FK
+    int assigned_user_id FK "the ONE non-admin user with access"
   }
   labels {
     int id PK
@@ -53,10 +45,10 @@ erDiagram
     int id PK
     int project_id FK
     int version_id FK
-    string storage_path "path on disk"
+    string storage_path "image file on disk"
+    string annotations_path "JSON backup on disk"
     string status "unannotated..approved"
     string split "train/val/test"
-    int assigned_to FK
     int reviewed_by FK
     datetime reviewed_at
   }
@@ -69,12 +61,6 @@ erDiagram
     int created_by FK
     int updated_by FK
     datetime updated_at
-  }
-  image_locks {
-    int id PK
-    int image_id FK "unique"
-    int user_id FK
-    datetime heartbeat_at
   }
   activity_log {
     int id PK

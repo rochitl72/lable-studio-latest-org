@@ -34,6 +34,13 @@ RUN mkdir -p /data/storage /data/exports
 
 EXPOSE 8000
 
-# On startup the app auto-creates any missing tables and seeds the first admin
-# (see app/db/database.py). For controlled migrations run `alembic upgrade head`.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Health probe used by docker-compose to gate the frontend on a ready API.
+# /health is unauthenticated and does no database work, so it answers "is this
+# process up" without side effects.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=40s --retries=5 \
+    CMD python -c "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).status == 200 else sys.exit(1)"
+
+# entrypoint.sh waits for the database, runs `alembic upgrade head`, then starts
+# uvicorn — so the migration chain is applied and verified on every deploy.
+RUN chmod +x entrypoint.sh
+CMD ["./entrypoint.sh"]

@@ -1,10 +1,14 @@
-"""Admin dashboards.
+"""Admin dashboards. Read-only metrics; admin role required throughout.
 
-Four bundles:
-  C1 progress & velocity   /overview, /velocity, /contributors
-  C2 quality & agreement   /quality, /agreement
-  C3 activity              (see api/activity.py)
-  C4 assignment & workload /workload, /review-queue, /assign, /presence
+Endpoints, grouped by what they answer:
+  progress & velocity   /overview, /velocity, /contributors
+  quality & agreement   /quality, /agreement
+  workload & review     /workload, /review-queue
+  activity feed         (see api/admin/activity.py)
+
+Note: /overview and /review-queue are the two the UI currently renders.
+/velocity, /quality and /workload are implemented and wired into
+`frontend/src/lib/api/client.js`, but no component displays them yet.
 """
 from collections import defaultdict
 from datetime import date, timedelta
@@ -15,7 +19,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.security import current_user, require_admin, require_reviewer
+from app.core.security import current_user, require_admin
 from app.db.database import get_db
 from app.models import (
     Action, ActivityLog, Annotation, Image, Project, User, utcnow,
@@ -55,7 +59,7 @@ def _aware(dt):
 async def overview(
     project_id: int | None = None,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_reviewer),
+    user: User = Depends(require_admin),
 ):
     """Headline numbers: completion split, totals, and projected finish."""
     q = select(Image.status, func.count()).group_by(Image.status)
@@ -112,7 +116,7 @@ async def velocity(
     project_id: int | None = None,
     days: int = Query(14, ge=1, le=180),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_reviewer),
+    user: User = Depends(require_admin),
 ):
     """Daily completed-vs-approved counts, for the trend chart."""
     since = utcnow() - timedelta(days=days)
@@ -153,7 +157,7 @@ async def velocity(
 async def contributors(
     project_id: int | None = None,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_reviewer),
+    user: User = Depends(require_admin),
 ):
     """Per-user contribution table."""
     users = (
@@ -221,7 +225,7 @@ async def contributors(
 async def quality(
     project_id: int | None = None,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_reviewer),
+    user: User = Depends(require_admin),
 ):
     """Rejection rate and labelling density per annotator.
 
@@ -296,7 +300,7 @@ async def agreement(
     project_id: int | None = None,
     iou_threshold: float = Query(0.5, ge=0.1, le=0.95),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_reviewer),
+    user: User = Depends(require_admin),
 ):
     """Inter-annotator agreement.
 
@@ -393,7 +397,7 @@ async def agreement(
 async def workload(
     project_id: int | None = None,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_reviewer),
+    user: User = Depends(require_admin),
 ):
     """Per-annotator: images in their assigned projects, pending vs completed,
     plus the count of images in projects that have no assigned user yet."""
@@ -444,7 +448,7 @@ async def review_queue(
     project_id: int | None = None,
     limit: int = Query(100, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_reviewer),
+    user: User = Depends(require_admin),
 ):
     """Images waiting on a reviewer, oldest first."""
     q = select(Image).where(Image.status.in_(["annotated", "needs_review"]))

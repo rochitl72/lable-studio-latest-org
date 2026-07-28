@@ -1,5 +1,22 @@
 # RBG Annotation Studio — Multi-User Implementation Plan
 
+> ⚠️ **HISTORICAL — SUPERSEDED. Not a description of the current system.**
+>
+> This plan was written for an earlier design and is kept only as a record of how
+> the project got here. Since it was written:
+>
+> * live multi-user co-editing of one image (WebSocket, presence, image locks)
+>   was **removed**;
+> * many-users-per-project (`project_members`) was replaced by **one assigned
+>   user per project**;
+> * the one-click desktop launchers were dropped in favour of a **Docker
+>   deployment on a server**;
+> * ML auto-labelling (SAM / GroundingDINO) was **removed**.
+>
+> For how the system actually works now, read `../ARCHITECTURE.md` and
+> `../DATA_FLOW.md`.
+
+
 Supersedes the decisions left open in `MULTI_USER_PLAN.md`. This is the agreed
 scope for the multi-user, deployment-ready build.
 

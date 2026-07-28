@@ -48,7 +48,7 @@ def run_migrations_online() -> None:
             connection=connection,
             target_metadata=target_metadata,
             compare_type=True,
-            render_as_batch=settings.is_sqlite,  # SQLite can't ALTER in place
+            render_as_batch=False,  # PostgreSQL supports ALTER in place
         )
         with context.begin_transaction():
             context.run_migrations()

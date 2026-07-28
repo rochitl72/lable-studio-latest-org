@@ -1,7 +1,6 @@
 """Async SQLAlchemy session + Base setup.
 
-Production target is PostgreSQL (asyncpg). The test suite points DATABASE_URL
-at SQLite, which is why the connect args are dialect-dependent.
+The database is PostgreSQL (asyncpg driver), the only supported backend.
 """
 import logging
 
@@ -18,11 +17,8 @@ class Base(DeclarativeBase):
 
 
 def _engine_kwargs() -> dict:
-    if settings.is_sqlite:
-        # SQLite needs this to be usable from more than one thread.
-        return {"connect_args": {"check_same_thread": False}}
-    # Postgres: keep a modest pool and recycle connections so a restarted
-    # database server doesn't leave stale handles behind.
+    # Keep a modest pool and recycle connections so a restarted database server
+    # doesn't leave stale handles behind.
     return {
         "pool_size": settings.DB_POOL_SIZE,
         "max_overflow": settings.DB_MAX_OVERFLOW,
@@ -65,11 +61,11 @@ _ADDITIVE_COLUMNS = [
 def _reconcile_sync(sync_conn) -> None:
     """Add any post-release columns that a pre-existing table is missing.
 
-    Works on both PostgreSQL and SQLite by asking the database which columns
-    actually exist (via the inspector) and issuing a plain `ADD COLUMN` only for
-    the ones that don't — so we never depend on `ADD COLUMN IF NOT EXISTS`,
-    which SQLite lacks. If the table itself is absent, `create_all` already made
-    it fresh with every column, so there's nothing to do.
+    Asks PostgreSQL which columns actually exist (via the inspector) and issues
+    a plain `ADD COLUMN` only for the ones that don't. If the table itself is
+    absent, `create_all` already made it fresh with every column, so there's
+    nothing to do. For controlled, versioned changes use Alembic; this is only a
+    safety net against simple additive drift.
     """
     from sqlalchemy import inspect as sa_inspect
 

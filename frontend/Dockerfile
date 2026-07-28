@@ -1,9 +1,9 @@
 # ─────────────────────────────────────────────────────────────────────
 # Frontend image — two stages
 #   1) build : compile the React/Vite app to static files
-#   2) serve : hand those files to nginx, which also reverse-proxies the
-#              API (/api) and the collaboration WebSocket (/ws) to the
-#              backend container, so the browser only ever talks to one origin.
+#   2) serve : hand those files to nginx, which also reverse-proxies /api and
+#              /health to the backend container, so the browser only ever
+#              talks to one origin (no CORS, no second host to configure).
 # ─────────────────────────────────────────────────────────────────────
 
 # ─── Stage 1: build ──────────────────────────────────────────────────
@@ -30,7 +30,7 @@ RUN npm run build
 # ─── Stage 2: serve ──────────────────────────────────────────────────
 FROM nginx:1.27-alpine
 
-# SPA + reverse-proxy config (routes /api and /ws to the backend service).
+# SPA + reverse-proxy config (routes /api and /health to the backend service).
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 # Only the compiled assets ship in the final image — no Node, no source.

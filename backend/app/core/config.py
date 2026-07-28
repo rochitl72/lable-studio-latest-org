@@ -31,17 +31,18 @@ class Settings(BaseSettings):
     BASE_DIR: Path = Path(__file__).resolve().parent.parent.parent
     STORAGE_DIR: Path = BASE_DIR / "storage"
 
-    # ─── Database ────────────────────────────────────────────────────
-    # PostgreSQL. Format:
-    #   postgresql+asyncpg://user:password@host:5432/dbname
+    # ─── Database (PostgreSQL only) ──────────────────────────────────
+    # Format: postgresql+asyncpg://user:password@host:5432/dbname
     POSTGRES_USER: str = "annoforge"
     POSTGRES_PASSWORD: str = "annoforge"
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
     POSTGRES_DB: str = "annoforge"
 
-    # Set this to override the pieces above entirely (e.g. a managed-database
-    # connection string). The test suite points it at SQLite.
+    # Set this to override the pieces above entirely — e.g. a managed-database
+    # connection string. Must be a PostgreSQL URL
+    # (postgresql+asyncpg://user:pass@host:5432/dbname); PostgreSQL is the only
+    # supported database.
     DATABASE_URL: str = ""
 
     # Connection pool. Defaults suit a small team; raise for dozens of
@@ -79,8 +80,10 @@ class Settings(BaseSettings):
     BOOTSTRAP_ADMIN_EMAIL: str = "admin@example.com"
 
     # Optional second seeded account for quick local testing as a plain user.
-    # Set SEED_TEST_USER=false to skip it entirely (e.g. on a shared server).
-    SEED_TEST_USER: bool = True
+    # Defaults to FALSE so a deployment can never accidentally ship a
+    # well-known `test`/`123` login. Set SEED_TEST_USER=true in your local
+    # .env when you want it for development.
+    SEED_TEST_USER: bool = False
     BOOTSTRAP_TEST_USERNAME: str = DEFAULT_TEST_USERNAME
     BOOTSTRAP_TEST_PASSWORD: str = DEFAULT_TEST_PASSWORD
 
@@ -148,12 +151,8 @@ class Settings(BaseSettings):
 
     @property
     def sync_database_url(self) -> str:
-        """Alembic runs synchronously — swap the async driver out."""
-        return self.DATABASE_URL.replace("+asyncpg", "").replace("+aiosqlite", "")
-
-    @property
-    def is_sqlite(self) -> bool:
-        return self.DATABASE_URL.startswith("sqlite")
+        """Alembic runs synchronously — swap the async driver out for psycopg."""
+        return self.DATABASE_URL.replace("+asyncpg", "")
 
     @property
     def max_upload_bytes(self) -> int:
@@ -174,11 +173,6 @@ class Settings(BaseSettings):
         if self.is_production:
             return max(self.MIN_PASSWORD_LENGTH, 8)
         return self.MIN_PASSWORD_LENGTH
-
-    # ─── Collaboration ───────────────────────────────────────────────
-    # How long an image stays checked out without a heartbeat before another
-    # annotator may take it over.
-    LOCK_TIMEOUT_SECONDS: int = 120
 
 
 settings = Settings()

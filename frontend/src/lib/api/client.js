@@ -7,7 +7,7 @@
 // backend — see config.js for the full explanation.
 
 import { getToken, logout } from "../auth";
-import { API_BASE } from "../config";
+import { API_BASE, API_ORIGIN } from "../config";
 
 const BASE = API_BASE;
 
@@ -44,7 +44,8 @@ async function req(path, init) {
     });
   } catch {
     throw new ApiError(
-      "Cannot reach the annotation server. Start “RBG Annotation Studio” from Desktop or run ./scripts/start-annoforge.sh",
+      "Cannot reach the annotation server. Check your network connection, " +
+        "then retry. If it persists, contact your administrator.",
     );
   }
   if (r.status === 401) {
@@ -68,10 +69,17 @@ async function req(path, init) {
   return r.json();
 }
 
+/** Is the backend reachable?
+ *
+ *  Hits `/health`, which is deliberately unauthenticated: it answers "is the
+ *  server up", not "am I logged in". Probing an authenticated endpoint instead
+ *  would report a 401/403 as an outage and show the user a misleading
+ *  "server offline" banner. Note `/health` sits at the ORIGIN root, not under
+ *  /api, so it is derived from API_ORIGIN rather than BASE.
+ */
 export const checkApiHealth = async () => {
   try {
-    const r = await fetch(`${BASE}/projects`, {
-      headers: authHeaders(),
+    const r = await fetch(`${API_ORIGIN}/health`, {
       signal: AbortSignal.timeout(4000),
     });
     return r.ok;

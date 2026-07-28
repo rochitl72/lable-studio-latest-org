@@ -3,9 +3,11 @@
 Ownership rules:
   * a plain user may edit and delete only their own annotations
   * an admin may edit and delete anyone's
-Project membership is required for any access at all; locks are enforced
-server-side, so a client that skips the lock call still cannot write to an
-image someone else is holding.
+Project access is required for any of it: a project is reachable by an admin, or
+by the single user it is assigned to (see `services/membership.py`). Every rule
+here is enforced server-side, so a client that skips a check still cannot write.
+
+An image with status "approved" is frozen to everyone but an admin.
 """
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel

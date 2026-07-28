@@ -1,5 +1,22 @@
 # Multi-user collaboration + Postgres — implementation plan
 
+> ⚠️ **HISTORICAL — SUPERSEDED. Not a description of the current system.**
+>
+> This plan was written for an earlier design and is kept only as a record of how
+> the project got here. Since it was written:
+>
+> * live multi-user co-editing of one image (WebSocket, presence, image locks)
+>   was **removed**;
+> * many-users-per-project (`project_members`) was replaced by **one assigned
+>   user per project**;
+> * the one-click desktop launchers were dropped in favour of a **Docker
+>   deployment on a server**;
+> * ML auto-labelling (SAM / GroundingDINO) was **removed**.
+>
+> For how the system actually works now, read `../ARCHITECTURE.md` and
+> `../DATA_FLOW.md`.
+
+
 Draft for review. Decision points are marked **[CHOOSE]** — nothing gets built
 until those are settled.
 

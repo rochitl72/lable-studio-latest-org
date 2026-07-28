@@ -27,11 +27,11 @@ export default function ApiStatusBanner() {
     <div className="api-status-banner" role="alert">
       <AlertCircle size={18} />
       <div className="api-status-text">
-        <strong>Server offline</strong>
+        <strong>Cannot reach the server</strong>
         <span>
-          Projects and labels are stored locally, but the API is not running.
-          Double-click <em>Start RBG Annotation Studio</em> on your Desktop (or
-          run the start script), then retry.
+          Your work is saved on the server, so nothing is lost — but it is not
+          responding right now. This is usually brief. Retry in a moment, and
+          tell your administrator if it keeps happening.
         </span>
       </div>
       <button

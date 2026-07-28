@@ -193,8 +193,3 @@ def require_role(minimum: str):
 
 require_user = require_role(Role.USER)
 require_admin = require_role(Role.ADMIN)
-
-# Backwards-compatible aliases. The reviewer tier was folded into admin, so any
-# endpoint that used to demand a reviewer now demands an admin.
-require_annotator = require_user
-require_reviewer = require_admin

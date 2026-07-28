@@ -29,7 +29,10 @@ def export_project(
     only_annotated: bool = True,
     create_zip: bool = True,
 ) -> None:
-    engine = create_engine(f"sqlite:///{settings.DB_PATH}")
+    # Standalone CLI helper: connect to the same PostgreSQL database the app
+    # uses (synchronous driver, since this script isn't async). The in-app
+    # export endpoints in api/dataset/export.py are the normal path.
+    engine = create_engine(settings.sync_database_url)
     Session = sessionmaker(bind=engine)
 
     with Session() as db:

@@ -65,7 +65,11 @@ services:
     ports:
       - "${WEB_PORT:-8080}:80"
     depends_on:
-      - backend
+      # Wait for the API's healthcheck, not just for the container to exist.
+      # nginx resolves the `backend` hostname when it starts; if it comes up
+      # first, the very first page load 502s.
+      backend:
+        condition: service_healthy
 
 volumes:
   pgdata:     # database files

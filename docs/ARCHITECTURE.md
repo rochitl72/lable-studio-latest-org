@@ -13,24 +13,30 @@ Three moving parts:
    Browser (React SPA)                FastAPI backend (Python)          PostgreSQL
  ┌──────────────────────┐   HTTPS   ┌───────────────────────────┐    ┌──────────┐
  │  components + stores  │◀────────▶│  api routers → services   │◀──▶│  tables  │
- │  (annotate, admin…)   │   REST    │  auth · RBAC · membership │    │          │
- │                       │◀────────▶│  WebSocket (live co-edit) │    └──────────┘
- └──────────────────────┘    WS     └───────────────────────────┘
+ │  (annotate, admin…)   │   REST    │  auth · RBAC · access     │    │          │
+ └──────────────────────┘           └───────────────────────────┘    └──────────┘
                                               │ files on disk
                                               ▼
-                                     STORAGE_DIR/project_{id}/{xx}/{uuid}.ext
+              STORAGE_DIR/users/{uid}_{name}/projects/{pid}_{name}/images/{xx}/{uuid}.ext
 ```
 
-- **Structured data** (users, projects, annotations, memberships, audit log,
+- **Structured data** (users, projects, annotations, assignments, audit log,
   dataset versions) lives in **PostgreSQL**.
 - **Image files** live on the **server's disk**, referenced by path in the DB.
 - The **backend** is Python/FastAPI: it owns authentication, role-based access,
-  project membership, and all persistence.
+  project access, and all persistence.
 - The **frontend** is a React single-page app that talks to the backend over
-  REST for everything, plus one WebSocket per open image for live collaboration.
+  **plain REST only**. There is no WebSocket.
 
-In production the built frontend is served by the same FastAPI process (see
-`backend/app/main.py`), so the whole thing runs on one port.
+In the supported deployment (`docker-compose.yml`) the frontend is compiled to
+static files and served by its own **nginx** container, which reverse-proxies
+`/api` and `/health` to the backend — so the browser sees one origin. FastAPI can
+alternatively serve the built bundle itself for single-process setups (see
+`backend/app/main.py`).
+
+> **Not in this system:** simultaneous editing of one image by two people, and
+> ML-assisted auto-labelling. Both existed in an earlier version of the project
+> and were removed. See the archive repo referenced in the root README.
 
 ---
 
@@ -45,7 +51,7 @@ main.py                     app assembly: mounts routers, applies the auth guard
 │   ├── auth/               login, logout, me, register, change-password (auth.py)
 │   │                       admin user management (users.py)
 │   ├── workspace/          the core annotation loop
-│   │                       projects.py  — projects, labels, membership
+│   │                       projects.py  — projects, labels, assignee
 │   │                       images.py    — upload / list / serve image files
 │   │                       annotations.py — annotation CRUD (+ ownership rules)
 │   ├── dataset/            everything about the dataset as an output
@@ -53,10 +59,6 @@ main.py                     app assembly: mounts routers, applies the auth guard
 │   │                       splits.py    — train/val/test assignment
 │   │                       workflow.py  — image status + review decisions
 │   │                       export.py    — COCO / YOLO / folder export
-│   ├── collaboration/      real-time + presence
-│   │                       ws.py        — WebSocket rooms (live co-editing)
-│   │                       locks.py     — legacy soft-lock endpoints (unused by
-│   │                                      the live-edit path; kept for reference)
 │   └── admin/              admin-only monitoring
 │                           dashboard.py — progress / velocity / quality metrics
 │                           activity.py  — audit-log feed & search
@@ -66,15 +68,16 @@ main.py                     app assembly: mounts routers, applies the auth guard
 │   └── security.py         password hashing, JWT, current_user, require_role gates
 │
 ├── db/                     database plumbing
-│   ├── database.py         async engine + session, create_all on startup
+│   ├── database.py         async engine + session, create_all safety net
 │   └── bootstrap.py        seeds the first admin on an empty database
 │
 ├── models/                 SQLAlchemy ORM models (the schema, in one file)
-│   └── models.py           User, Project, Image, Annotation, ProjectMember,
-│                           ActivityLog, DatasetVersion, ImageLock, Role, Action
+│   └── models.py           User, Project, Image, Annotation, ActivityLog,
+│                           DatasetVersion, Label, Role, Action
 │
 ├── services/               reusable business logic (no HTTP here)
 │   ├── membership.py       "may this user access this project?"
+│   ├── storage.py          per-user file tree; annotation/log backups; moves
 │   ├── activity.py         audit-log recorder (record() called on every mutation)
 │   ├── metrics.py          IoU / inter-annotator agreement math
 │   └── export/             dataset export formats (COCO, YOLO, overlays, RLE)
@@ -97,7 +100,8 @@ This is the part you'll touch most, so here it is end to end.
    against the bcrypt hash in the `users` table (`core/security.authenticate`).
    On success the server issues a **JWT** carrying the user id and role, and
    also sets it as an httpOnly cookie (the cookie exists only so `<img>` tags
-   can load protected image files, which can't send an Authorization header).
+   and `<a href>` downloads can reach protected files, which can't send an
+   Authorization header).
 
 2. **Every protected request** carries `Authorization: Bearer <token>`. The
    `current_user` dependency in `core/security.py` decodes the token and then
@@ -107,14 +111,18 @@ This is the part you'll touch most, so here it is end to end.
 3. **Role gates.** There are two roles: `user` and `admin` (`models.Role`).
    `require_admin` / `require_user` are FastAPI dependencies produced by
    `require_role()`. An endpoint that needs admin simply declares
-   `user: User = Depends(require_admin)`. Everything the old "reviewer" role
+   `user: User = Depends(require_admin)`. Everything an earlier "reviewer" role
    could do is now folded into `admin`; `user.can_review` means "is admin".
 
 4. **Default-protected routing.** In `main.py`, every router is included with
    `dependencies=[Depends(current_user)]`, so a newly added endpoint is
-   authenticated by default — you have to opt *out* deliberately. The WebSocket
-   is the deliberate exception (it authenticates from a `?token=` query param
-   inside the handler, because a WebSocket can't set headers).
+   authenticated by default — you have to opt *out* deliberately. There are two
+   deliberate exceptions, both narrow:
+   - `images.file_router` and the export router use `current_user_or_cookie`,
+     which also accepts the httpOnly cookie, because `<img src>` and `<a href>`
+     downloads cannot set headers. Both are read-only GETs.
+   - `/api/auth/login`, `/api/auth/config`, `/health` and `/api` are open by
+     necessity.
 
 5. **First-run safety.** On an empty database `db/bootstrap.py` seeds one admin
    from the `BOOTSTRAP_ADMIN_*` settings and flags it `must_change_password`, so
@@ -124,42 +132,48 @@ This is the part you'll touch most, so here it is end to end.
 
 ---
 
-## 4. How project membership gates access
+## 4. How project access is gated
 
-Roles say *what* you can do; membership says *which projects* you can do it in.
+Roles say *what* you can do; assignment says *which projects* you can do it in.
 
-- `project_members` (in `models.py`) maps users to projects.
+- Each project has a single `projects.assigned_user_id` — **one user per
+  project**. (An earlier many-to-many `project_members` table was collapsed into
+  this; migration `e5f4d3single5` performs the change.)
 - `services/membership.py` answers `is_member()` / `assert_member()`. **Admins
-  always pass** — membership only constrains plain users.
-- Project-scoped endpoints call `assert_member()` before doing anything, so a
-  non-member gets `403` even with a valid token, and `list_projects` filters to
-  the caller's memberships. An admin manages membership from the "Members" panel
-  (`POST/DELETE /api/projects/{id}/members`).
+  always pass** — assignment only constrains plain users. The function names are
+  unchanged from the multi-member era so every caller kept working.
+- Project-scoped endpoints call `assert_member()` before doing anything, so an
+  unassigned user gets `403` even with a valid token, and `list_projects` filters
+  to the caller's assigned projects. An admin sets the assignee from the project
+  panel (`GET/PUT /api/projects/{id}/assignee`).
+- A project must have an assigned user **before images can be uploaded**, because
+  its files live under that user's folder on disk.
 
 ---
 
-## 5. How live co-editing works
+## 5. How per-user file storage works
 
-The goal: several people annotate the **same image at the same time** and see
-each other's shapes appear live.
+Only *paths* live in Postgres; the bytes live on disk, under the owning user.
 
-- **Persistence stays REST.** When you draw a box it is saved through the normal
-  `POST /api/annotations` endpoint — Postgres remains the single source of
-  truth. (See `frontend/src/store/history.js`, the one place edits are saved.)
-- **The WebSocket is a notification side-channel.** After a successful save the
-  client sends a tiny `{type:"changed"}` message to the image's room
-  (`api/collaboration/ws.py`). The server rebroadcasts it to everyone *else* in
-  that room, who then re-fetch the image's annotations and redraw. Reconnect is
-  therefore trivially safe: on reconnect the client just re-fetches.
-- **Presence** (who else is here) rides the same socket and is ephemeral — it's
-  never written to the database.
-- Because editing is now collaborative, the old one-editor-per-image soft lock
-  is **not enforced** on the annotation write path (the `locks.py` endpoints are
-  left in place but unused by live editing).
+```
+STORAGE_DIR/users/{user_id}_{username}/
+├── projects/{project_id}_{project_name}/
+│   ├── images/{xx}/{uuid}.ext        original uploads, sharded by the first two
+│   │                                 hex chars so no directory grows huge
+│   ├── annotations/{image_id}.json   per-image backup, rewritten on every edit
+│   └── exports/{timestamp}/          generated bundles
+└── activity.log                      plain-text mirror of that user's actions
+```
 
-Frontend side: `lib/collab.js` owns the socket (connect / notifyChange /
-presence / auto-reconnect); `components/annotate/AnnotateView.jsx` connects on
-image open and shows the presence bar.
+`services/storage.py` is pure path math plus filesystem operations — it never
+touches the database, so callers keep control of their transactions.
+
+- `images.storage_path` and `images.annotations_path` hold the absolute paths.
+- The annotations table remains **authoritative**; the JSON file is a
+  continuously-synced backup so dashboards and exports stay fast.
+- **Reassigning a project moves its whole folder** to the new owner
+  (`move_project_dir`) — on one disk that's a rename, not a byte copy. The caller
+  updates the stored paths in the same transaction so DB and disk stay in step.
 
 ---
 
@@ -168,11 +182,11 @@ image open and shows the presence bar.
 ```
 main.jsx                    routes (React Router); gates /admin/* to admins
 App.jsx                     app shell: header, role-aware nav, password-change gate
-styles.css                  all styling (dark theme via CSS variables)
+styles.css                  all styling (CSS variables; light "vivid" theme)
 │
 ├── lib/                    non-UI app plumbing
 │   ├── auth.js             token + current-user cache; isAdmin(), login(), logout()
-│   ├── collab.js           the live-collaboration WebSocket client
+│   ├── config.js           resolves the API base URL (same-origin, or absolute)
 │   └── api/client.js       every REST call, one wrapper function per endpoint
 │
 ├── store/                  Zustand state stores
@@ -183,34 +197,45 @@ styles.css                  all styling (dark theme via CSS variables)
 │
 └── components/             UI, grouped by feature
     ├── auth/               LoginPage, ChangePasswordModal
-    ├── projects/           ProjectList (+ admin members panel), VersionsPanel
+    ├── projects/           ProjectList (+ admin assignee panel), VersionsPanel
     ├── annotate/           the annotation workspace
     │   ├── AnnotateView.jsx    orchestrates the screen
     │   ├── canvas/            the Konva drawing surface + editable shapes
     │   └── (ReviewBar, ImageGallerySidebar, tool docks, magnifier…)
     ├── admin/              AdminDashboard, UserManagement, ActivityFeed,
-    │                       ProjectMembersPanel
+    │                       ProjectMembersPanel (sets the single assignee)
+    ├── home/               MyProgress (a plain user's own numbers)
     └── common/             shared widgets (ApiStatusBanner, ToolTipButton)
 ```
 
 **Data-flow rule of thumb:** components call `lib/api/client.js` for reads and
-call through `store/history.js` for annotation writes (so undo/redo and live
-sync both happen automatically). Role-dependent UI reads `isAdmin()` from
-`lib/auth.js`; the backend enforces the same rule regardless, so hiding a button
-is convenience, not security.
+call through `store/history.js` for annotation writes (so undo/redo happens
+automatically). Role-dependent UI reads `isAdmin()` from `lib/auth.js`; the
+backend enforces the same rule regardless, so hiding a button is convenience,
+not security.
 
 ---
 
 ## 7. Running & deploying
 
-- **Local dev:** `docker compose up -d` (Postgres), then `scripts/start-annoforge.sh`
-  runs the backend (8000) and the Vite dev server (5173).
-- **Production build:** `scripts/build.sh` compiles the frontend into
-  `frontend/dist`, which the backend then serves — one process, one port.
-- **Migrations:** `alembic upgrade head` applies schema changes. On an existing
-  database this brings in the two-role conversion, `must_change_password`, and
-  the `project_members` table.
+- **Local dev:** start a Postgres container, run the backend with
+  `uvicorn app.main:app --reload` (8000), and the Vite dev server with
+  `npm run dev` (5173). Vite proxies `/api` to 8000. Full commands in the root
+  README.
+- **Deployment:** `docker compose up -d --build` brings up Postgres, the API,
+  and nginx serving the built SPA. `backend/entrypoint.sh` waits for the
+  database, runs `alembic upgrade head`, then starts uvicorn; the web container
+  waits for the API's healthcheck before accepting traffic.
+- **Migrations:** Alembic is the source of truth and runs automatically on
+  container start. `db/database.py` additionally keeps a `create_all` +
+  additive-column safety net so a database that drifted is never left
+  un-runnable — but for real schema changes, write a migration.
+- **HTTPS:** terminate TLS with a reverse proxy on the host (Caddy or nginx)
+  pointing at `127.0.0.1:${WEB_PORT}`, then set `COOKIE_SECURE=true`. See the
+  root README.
 - **Backups:** `scripts/backup.sh` dumps Postgres and archives the image volume
-  (schedule it nightly with cron). See `.env.example` for all settings.
+  (schedule it nightly with cron). See `backend/.env.example` for all settings.
 
-See `IMPLEMENTATION_PLAN.md` for the multi-user build plan and current status.
+`docs/planning/` holds the historical plans. They describe the **earlier**
+multi-user and desktop-launcher design and no longer match this codebase — read
+them as history, not specification.
